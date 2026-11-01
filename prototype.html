@@ -1,0 +1,1521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>企业知识库</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307c05f'/%3E%3Cpath d='M9 10.5c0-.8.7-1.5 1.5-1.5H14c1.1 0 2 .9 2 2v12c0-1.1-.9-2-2-2h-3.5A1.5 1.5 0 0 1 9 19.5v-9zM23 10.5c0-.8-.7-1.5-1.5-1.5H18c-1.1 0-2 .9-2 2v12c0-1.1.9-2 2-2h3.5a1.5 1.5 0 0 0 1.5-1.5v-9z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+/* ========== WeKnora 主题变量（取自 frontend/src/assets/theme/theme.css） ========== */
+:root{
+  --brand:#07c05f; --brand-hover:#08dd6e; --brand-active:#06b04d;
+  --brand-1:#e9f8ec; --brand-2:#09f479; --brand-6:#049b38;
+  --bg-page:#eeeeee; --bg-container:#ffffff; --bg-sidebar:#f9f9f9;
+  --bg-secondary:#f3f3f3; --bg-hover:#f3f3f3; --bg-active:#e7e7e7;
+  --bg-component:#e7e7e7; --bg-component-hover:#dcdcdc;
+  --stroke:#e7e7e7; --border:#dcdcdc;
+  --text-1:rgba(0,0,0,.9); --text-2:rgba(0,0,0,.6); --text-3:rgba(0,0,0,.4); --text-4:rgba(0,0,0,.26);
+  --shadow-1:0 1px 10px rgba(0,0,0,.05),0 4px 5px rgba(0,0,0,.08),0 2px 4px -1px rgba(0,0,0,.12);
+  --shadow-2:0 3px 14px 2px rgba(0,0,0,.05),0 8px 10px 1px rgba(0,0,0,.06),0 5px 5px -3px rgba(0,0,0,.1);
+  --shadow-pop:0 0 0 .5px rgba(0,0,0,.03),0 2px 4px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.1);
+  --radius-sm:3px; --radius:6px; --radius-lg:9px; --radius-xl:12px;
+  --sidebar-w:260px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+[data-theme="dark"]{
+  --brand:#06b04d; --brand-hover:#049b38; --brand-active:#07c05f;
+  --brand-1:rgba(6,176,77,.125); --brand-2:#015e0d; --brand-6:#06b04d;
+  --bg-page:#181818; --bg-container:#242424; --bg-sidebar:#181818;
+  --bg-secondary:#2c2c2c; --bg-hover:#2c2c2c; --bg-active:#383838;
+  --bg-component:#383838; --bg-component-hover:#4b4b4b;
+  --stroke:#383838; --border:#4b4b4b;
+  --text-1:rgba(255,255,255,.9); --text-2:rgba(255,255,255,.55); --text-3:rgba(255,255,255,.35); --text-4:rgba(255,255,255,.22);
+  --shadow-1:0 1px 10px rgba(0,0,0,.3),0 4px 5px rgba(0,0,0,.3);
+  --shadow-2:0 3px 14px 2px rgba(0,0,0,.35),0 8px 10px 1px rgba(0,0,0,.3);
+  --shadow-pop:0 0 0 .5px rgba(255,255,255,.06),0 2px 4px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);font-size:14px;color:var(--text-1);background:var(--bg-container);overflow:hidden;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;border:none;background:none;cursor:pointer;color:inherit;font-size:inherit}
+input,textarea,select{font-family:inherit;font-size:inherit;color:var(--text-1)}
+svg{flex:none;display:block}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:transparent;border-radius:3px}
+*:hover::-webkit-scrollbar-thumb{background:var(--border)}
+
+/* ========== 图标 ========== */
+.ic{width:16px;height:16px}
+.ic-lg{width:20px;height:20px}
+
+/* ========== 登录页 ========== */
+.login-view{position:fixed;inset:0;display:flex;background:var(--bg-container);z-index:60}
+.login-hero{flex:1;display:flex;flex-direction:column;justify-content:center;padding:64px;gap:20px;
+  background:linear-gradient(135deg,var(--brand-1) 0%,var(--bg-container) 62%);border-right:1px solid var(--stroke)}
+.login-hero .logo-row{display:flex;align-items:center;gap:14px}
+.login-hero h1{font-size:30px;font-weight:600}
+.login-hero .sub{color:var(--text-2);font-size:15px;max-width:420px;line-height:1.7}
+.login-features{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+.login-feature{display:flex;align-items:center;gap:10px;color:var(--text-2)}
+.login-feature .dot{width:28px;height:28px;border-radius:8px;background:var(--brand-1);color:var(--brand);display:flex;align-items:center;justify-content:center}
+.login-panel{width:460px;display:flex;align-items:center;justify-content:center;padding:40px}
+.login-card{width:100%;max-width:340px}
+.login-card h2{font-size:22px;font-weight:600;margin-bottom:6px}
+.login-card .welcome{color:var(--text-2);margin-bottom:28px}
+.login-card label{display:block;font-size:13px;color:var(--text-2);margin:14px 0 6px}
+.login-input{width:100%;height:40px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-container);
+  padding:0 12px;outline:none;transition:border-color .15s,box-shadow .15s}
+.login-input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-1)}
+.login-submit{width:100%;height:40px;margin-top:24px;border-radius:var(--radius);background:var(--brand);color:#fff;font-weight:500;
+  transition:background .15s}
+.login-submit:hover{background:var(--brand-hover)}
+.login-submit:active{background:var(--brand-active)}
+.login-oidc{width:100%;height:40px;margin-top:14px;border-radius:var(--radius);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;gap:8px;transition:border-color .15s,background .15s}
+.login-oidc:hover{border-color:var(--brand);color:var(--brand)}
+.login-divider{display:flex;align-items:center;gap:12px;color:var(--text-3);font-size:12px;margin-top:22px}
+.login-divider::before,.login-divider::after{content:"";flex:1;height:1px;background:var(--stroke)}
+.login-hint{margin-top:18px;font-size:12px;color:var(--text-3);text-align:center}
+@media (max-width:860px){.login-hero{display:none}.login-panel{width:100%}}
+
+/* ========== 应用骨架 ========== */
+.app{display:flex;width:100%;height:100%;min-width:600px;background:var(--bg-container)}
+.main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+
+/* ---------- 侧边栏 ---------- */
+.sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);display:flex;flex-direction:column;background:var(--bg-sidebar);
+  border-right:1px solid var(--stroke);transition:width .2s ease,min-width .2s ease;position:relative}
+.sidebar.collapsed{--sidebar-w:48px}
+.sidebar.collapsed .hide-collapsed{display:none!important}
+.logo-row{display:flex;align-items:center;justify-content:space-between;padding:16px 12px 8px 16px;gap:8px}
+.logo-box{display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer}
+.logo-mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--brand) 0%,var(--brand-hover) 100%);
+  color:#fff;display:flex;align-items:center;justify-content:center;flex:none}
+.logo-text{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.logo-actions{display:flex;align-items:center;gap:2px}
+.icon-btn{width:28px;height:28px;border-radius:var(--radius);display:flex;align-items:center;justify-content:center;
+  color:var(--text-2);transition:background .15s,color .15s}
+.icon-btn:hover{background:var(--bg-active);color:var(--text-1)}
+.new-chat-btn{margin:8px 12px 4px;display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;border-radius:var(--radius-lg);
+  background:var(--bg-container);border:.5px solid var(--stroke);box-shadow:var(--shadow-1);font-weight:500;color:var(--text-1);
+  transition:border-color .15s,background .15s}
+.new-chat-btn:hover{border-color:var(--brand)}
+.new-chat-btn .nc-icon{width:22px;height:22px;border-radius:6px;background:var(--brand-1);color:var(--brand);
+  display:flex;align-items:center;justify-content:center;flex:none}
+.sidebar.collapsed .new-chat-btn{margin:8px auto 4px;width:32px;height:32px;padding:0;justify-content:center;border:none;box-shadow:none;background:transparent}
+.sidebar.collapsed .new-chat-btn:hover{background:var(--bg-active)}
+.menu-scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 12px 12px;display:flex;flex-direction:column}
+.menu-item{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:var(--radius-lg);color:var(--text-2);
+  cursor:pointer;transition:background .15s,color .15s;white-space:nowrap;user-select:none}
+.menu-item:hover{background:var(--bg-active);color:var(--text-1)}
+.menu-item.active{background:var(--brand-1);color:var(--brand);font-weight:500}
+.menu-item .mi-icon{width:20px;display:flex;justify-content:center;flex:none}
+.menu-item .mi-title{overflow:hidden;text-overflow:ellipsis}
+.menu-item .mi-badge{margin-left:auto;font-size:11px;color:var(--text-3)}
+.sidebar.collapsed .menu-item{padding:0;justify-content:center}
+.timeline-header{display:flex;align-items:center;gap:6px;margin:14px 4px 6px;font-size:12px;color:var(--text-3)}
+.timeline-header .th-label{flex:1}
+.session-row{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:var(--radius);color:var(--text-2);
+  cursor:pointer;font-size:13px;transition:background .15s,color .15s;white-space:nowrap}
+.session-row:hover{background:var(--bg-active);color:var(--text-1)}
+.session-row.active{background:var(--brand-1);color:var(--brand)}
+.session-row .s-title{flex:1;overflow:hidden;text-overflow:ellipsis}
+.session-empty{color:var(--text-4);font-size:12px;padding:8px 10px}
+.menu-bottom{border-top:1px solid var(--stroke);padding:10px 12px;display:flex;align-items:center;gap:10px}
+.avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#07c05f,#0aa3c2);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex:none}
+.user-meta{flex:1;min-width:0}
+.user-meta .u-name{font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px}
+.user-meta .u-role{font-size:11px;color:var(--text-3)}
+.role-tag{font-size:10px;padding:1px 6px;border-radius:999px;background:var(--brand-1);color:var(--brand);font-weight:500}
+.sidebar.collapsed .menu-bottom{flex-direction:column;padding:10px 6px}
+.resize-handle{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:10}
+
+/* ---------- 页面通用 ---------- */
+.view{display:none;flex:1;min-height:0;flex-direction:column;overflow:hidden}
+.view.active{display:flex}
+.page-header{display:flex;align-items:flex-start;justify-content:space-between;padding:26px 32px 14px;gap:16px}
+.page-header h2{font-size:20px;font-weight:600;display:flex;align-items:center;gap:10px}
+.page-header .subtitle{color:var(--text-2);margin-top:6px;font-size:13px}
+.header-actions{display:flex;align-items:center;gap:8px;flex:none}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:var(--radius);
+  border:.5px solid var(--border);background:var(--bg-container);color:var(--text-1);transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-1)}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:500}
+.btn.primary:hover{background:var(--brand-hover);border-color:var(--brand-hover);color:#fff}
+.btn.text{border:none;background:transparent;color:var(--text-2)}
+.btn.text:hover{background:var(--bg-active);color:var(--text-1)}
+.btn.small{height:28px;padding:0 10px;font-size:13px}
+.icon-only{width:32px;padding:0;justify-content:center}
+
+/* ---------- 知识库列表 ---------- */
+.kb-toolbar{display:flex;align-items:center;gap:12px;padding:0 32px 14px;flex-wrap:wrap}
+.scope-tabs{display:flex;gap:6px;flex-wrap:wrap}
+.scope-tab{height:30px;padding:0 14px;border-radius:999px;font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:6px;
+  background:var(--bg-secondary);transition:all .15s}
+.scope-tab:hover{color:var(--text-1)}
+.scope-tab.active{background:var(--brand-1);color:var(--brand);font-weight:500}
+.search-box{margin-left:auto;display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:var(--radius);
+  border:.5px solid var(--border);background:var(--bg-container);width:260px;color:var(--text-3)}
+.search-box input{flex:1;border:none;outline:none;background:transparent;min-width:0}
+.kb-scroll{flex:1;overflow-y:auto;padding:6px 32px 32px}
+.kb-section{display:flex;align-items:center;gap:8px;margin:14px 0 10px;color:var(--text-2);font-size:13px;font-weight:500}
+.kb-section .count{color:var(--text-3);font-weight:400}
+.kb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.kb-card{position:relative;display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:var(--radius-xl);
+  border:.5px solid var(--stroke);background:var(--bg-container);cursor:pointer;transition:box-shadow .2s,transform .2s,border-color .2s}
+.kb-card:hover{box-shadow:var(--shadow-2);border-color:var(--border)}
+.kb-card .card-header{display:flex;align-items:center;gap:10px}
+.kb-avatar{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;flex:none}
+.kb-avatar.document{background:linear-gradient(135deg,#07c05f,#03a36a)}
+.kb-avatar.faq{background:linear-gradient(135deg,#4f8ef7,#2b6de0)}
+.card-title{font-size:15px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fav-star{color:var(--text-4);transition:color .15s,transform .15s}
+.fav-star:hover{transform:scale(1.15);color:#f7ba2a}
+.fav-star.on{color:#f7ba2a}
+.more-btn{color:var(--text-4)}
+.more-btn:hover{color:var(--text-1)}
+.card-desc{color:var(--text-2);font-size:13px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;min-height:42px}
+.card-desc.empty{color:var(--text-4)}
+.badges{display:flex;gap:6px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:var(--radius);font-size:12px;
+  background:var(--bg-secondary);color:var(--text-2)}
+.badge.brand{background:var(--brand-1);color:var(--brand)}
+.badge.warn{background:rgba(237,123,47,.12);color:#ed7b2f}
+.badge.error{background:rgba(227,77,89,.1);color:#e34d59}
+.card-footer{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:12px}
+.card-footer .spacer{flex:1}
+.mini-avatar{width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;
+  font-size:10px;display:flex;align-items:center;justify-content:center}
+.org-chip{display:flex;align-items:center;gap:4px;color:var(--brand-6)}
+[data-theme="dark"] .org-chip{color:var(--brand-hover)}
+
+/* ---------- 知识库详情 ---------- */
+.kb-detail-header{display:flex;align-items:center;gap:12px;padding:18px 32px 12px}
+.back-btn{width:32px;height:32px;border-radius:var(--radius);display:flex;align-items:center;justify-content:center;color:var(--text-2)}
+.back-btn:hover{background:var(--bg-active);color:var(--text-1)}
+.kb-detail-title{flex:1;min-width:0}
+.kb-detail-title .row1{display:flex;align-items:center;gap:10px}
+.kb-detail-title h2{font-size:18px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kb-detail-title .meta{color:var(--text-3);font-size:12px;margin-top:4px}
+.doc-toolbar{display:flex;align-items:center;gap:10px;padding:6px 32px 12px;flex-wrap:wrap}
+.select-chip{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:var(--radius);border:.5px solid var(--border);
+  color:var(--text-2);font-size:13px;transition:all .15s}
+.select-chip:hover{border-color:var(--brand);color:var(--brand)}
+.doc-toolbar .search-box{margin-left:0;width:220px}
+.view-toggle{margin-left:auto;display:flex;background:var(--bg-secondary);border-radius:var(--radius);padding:2px;gap:2px}
+.view-toggle button{width:28px;height:26px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;color:var(--text-3)}
+.view-toggle button.on{background:var(--bg-container);color:var(--brand);box-shadow:var(--shadow-1)}
+.doc-table-wrap{flex:1;overflow-y:auto;padding:0 32px 20px}
+.doc-table{width:100%;border-collapse:collapse}
+.doc-table th{text-align:left;font-size:12px;color:var(--text-3);font-weight:400;padding:8px 12px;border-bottom:1px solid var(--stroke);white-space:nowrap}
+.doc-table td{padding:10px 12px;border-bottom:1px solid var(--stroke);font-size:13px;color:var(--text-2);vertical-align:middle}
+.doc-table tr.clickable{cursor:pointer;transition:background .15s}
+.doc-table tr.clickable:hover{background:var(--bg-hover)}
+.doc-name{display:flex;align-items:center;gap:10px;color:var(--text-1)}
+.doc-icon{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;flex:none;font-size:10px;font-weight:700}
+.doc-icon.pdf{background:rgba(227,77,89,.1);color:#e34d59}
+.doc-icon.doc{background:rgba(79,142,247,.12);color:#4f8ef7}
+.doc-icon.md{background:var(--brand-1);color:var(--brand)}
+.doc-icon.xls{background:rgba(0,168,112,.12);color:#00a870}
+.doc-icon.img{background:rgba(247,186,42,.15);color:#d99a00}
+.doc-icon.ppt{background:rgba(255,122,69,.12);color:#ff7a45}
+.tag-chip{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;font-size:11px;margin-right:4px;
+  background:var(--bg-secondary);color:var(--text-2)}
+.status-cell{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.status-dot{width:6px;height:6px;border-radius:50%}
+.status-ok{color:var(--brand)}.status-ok .status-dot{background:var(--brand)}
+.status-run{color:#4f8ef7}.status-run .status-dot{background:#4f8ef7;animation:pulse 1.2s infinite}
+.status-fail{color:#e34d59}.status-fail .status-dot{background:#e34d59}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.progress-line{width:80px;height:4px;border-radius:2px;background:var(--bg-component);overflow:hidden;margin-top:4px}
+.progress-line i{display:block;height:100%;border-radius:2px;background:#4f8ef7;animation:grow 6s linear forwards}
+@keyframes grow{from{width:8%}to{width:96%}}
+.doc-table-footer{display:flex;align-items:center;padding:10px 32px 16px;color:var(--text-3);font-size:12px;gap:16px}
+.pager{margin-left:auto;display:flex;gap:4px}
+.pager button{min-width:26px;height:26px;border-radius:var(--radius-sm);color:var(--text-2);font-size:12px}
+.pager button.on{background:var(--brand-1);color:var(--brand);font-weight:600}
+.pager button:hover:not(.on){background:var(--bg-active)}
+
+/* ---------- 对话页（新建 + 会话） ---------- */
+.chat-page{align-items:center;justify-content:center;gap:0;background:var(--bg-container)}
+.chat-hero{width:100%;max-width:860px;padding:0 24px;display:flex;flex-direction:column;gap:24px}
+.chat-title{font-size:28px;font-weight:600}
+.sq-caption{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:13px;margin-bottom:10px}
+.sq-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.sq-card{padding:12px 14px;border-radius:var(--radius-lg);border:.5px solid var(--stroke);background:var(--bg-container);
+  color:var(--text-2);font-size:13px;line-height:1.55;text-align:left;transition:all .18s;opacity:0;transform:translateY(8px);
+  animation:sqIn .35s ease forwards}
+.sq-card:nth-child(2){animation-delay:.05s}.sq-card:nth-child(3){animation-delay:.1s}
+.sq-card:nth-child(4){animation-delay:.15s}.sq-card:nth-child(5){animation-delay:.2s}.sq-card:nth-child(6){animation-delay:.25s}
+@keyframes sqIn{to{opacity:1;transform:none}}
+.sq-card:hover{border-color:var(--brand);color:var(--text-1);box-shadow:var(--shadow-1);background:var(--brand-1)}
+
+/* 输入框 */
+.composer{width:100%;max-width:860px;border-radius:16px;border:.5px solid var(--stroke);background:var(--bg-container);
+  box-shadow:var(--shadow-2);padding:12px 14px 10px;display:flex;flex-direction:column;gap:8px;transition:border-color .2s,box-shadow .2s}
+.composer:focus-within{border-color:var(--brand)}
+.chips-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.kb-chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:var(--radius);font-size:12px;
+  background:var(--brand-1);color:var(--brand);cursor:default}
+.kb-chip .x{cursor:pointer;opacity:.7}
+.kb-chip .x:hover{opacity:1}
+.chip-add{height:24px;padding:0 8px;border-radius:var(--radius);border:.5px dashed var(--border);color:var(--text-3);font-size:12px;
+  display:inline-flex;align-items:center;gap:4px}
+.chip-add:hover{color:var(--brand);border-color:var(--brand)}
+.composer textarea{width:100%;border:none;outline:none;resize:none;background:transparent;color:var(--text-1);
+  font-size:14px;line-height:1.6;min-height:44px;max-height:160px}
+.composer textarea::placeholder{color:var(--text-4)}
+.composer-bottom{display:flex;align-items:center;gap:4px}
+.send-btn{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--brand);color:#fff;
+  display:flex;align-items:center;justify-content:center;transition:background .15s,transform .1s}
+.send-btn:hover{background:var(--brand-hover)}
+.send-btn:active{transform:scale(.94)}
+.send-btn.stop{background:var(--bg-component);color:var(--text-1)}
+.mode-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:var(--radius);font-size:12px;
+  color:var(--text-2);border:.5px solid transparent}
+.mode-chip:hover{background:var(--bg-active)}
+.mode-chip .spark{color:var(--brand)}
+.model-tag{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:var(--radius);font-size:12px;
+  color:var(--text-3);background:var(--bg-secondary);margin-right:6px}
+
+/* 会话中 */
+.thread-topbar{display:flex;align-items:center;gap:10px;padding:12px 24px;border-bottom:1px solid var(--stroke);flex:none}
+.thread-topbar .t-title{font-weight:600;font-size:14px}
+.thread{flex:1;overflow-y:auto;min-height:0}
+.thread-inner{max-width:860px;margin:0 auto;padding:28px 24px 16px;display:flex;flex-direction:column;gap:22px}
+.msg-user{align-self:flex-end;max-width:75%;background:var(--brand-1);color:var(--text-1);padding:10px 14px;border-radius:14px 14px 4px 14px;
+  line-height:1.65;white-space:pre-wrap;word-break:break-word}
+.msg-ai{display:flex;gap:12px;max-width:100%}
+.msg-ai .ai-avatar{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--brand-hover));
+  color:#fff;display:flex;align-items:center;justify-content:center;flex:none;margin-top:2px}
+.msg-ai-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}
+.think-block{border:.5px solid var(--stroke);border-radius:var(--radius-lg);background:var(--bg-secondary);padding:10px 12px;
+  font-size:12px;color:var(--text-3)}
+.think-block .think-head{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.think-block .think-head .chev{transition:transform .2s;margin-left:auto}
+.think-block.open .chev{transform:rotate(180deg)}
+.think-block .think-body{display:none;margin-top:8px;line-height:1.7;border-top:1px dashed var(--border);padding-top:8px}
+.think-block.open .think-body{display:block}
+.answer{line-height:1.75;color:var(--text-1);white-space:pre-wrap;word-break:break-word}
+.cite{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 4px;margin:0 2px;
+  border-radius:5px;background:var(--brand-1);color:var(--brand);font-size:11px;font-weight:600;vertical-align:1px;cursor:pointer}
+.cite:hover{background:var(--brand);color:#fff}
+.caret{display:inline-block;width:7px;height:15px;background:var(--brand);vertical-align:-2px;border-radius:1px;
+  animation:blink .8s steps(1) infinite;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+.refs-row{display:flex;flex-direction:column;gap:6px}
+.ref-label{font-size:12px;color:var(--text-3)}
+.ref-card{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:var(--radius);border:.5px solid var(--stroke);
+  font-size:12px;color:var(--text-2);cursor:pointer;transition:all .15s;background:var(--bg-container)}
+.ref-card:hover{border-color:var(--brand);color:var(--text-1)}
+.ref-card .ref-idx{width:18px;height:18px;border-radius:5px;background:var(--brand-1);color:var(--brand);font-size:11px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;flex:none}
+.ref-card .ref-meta{margin-left:auto;color:var(--text-4);flex:none}
+.chat-composer-wrap{flex:none;padding:10px 24px 18px;display:flex;justify-content:center;background:var(--bg-container)}
+
+/* ---------- 智能体 ---------- */
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.agent-card{padding:18px;border-radius:var(--radius-xl);border:.5px solid var(--stroke);background:var(--bg-container);cursor:pointer;
+  display:flex;flex-direction:column;gap:12px;transition:box-shadow .2s,border-color .2s}
+.agent-card:hover{box-shadow:var(--shadow-2)}
+.agent-head{display:flex;align-items:center;gap:12px}
+.agent-avatar{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;color:#fff}
+.agent-name{font-weight:600;font-size:15px;flex:1}
+.agent-desc{color:var(--text-2);font-size:13px;line-height:1.6;min-height:42px}
+.agent-meta{display:flex;gap:14px;color:var(--text-3);font-size:12px}
+.agent-meta span{display:flex;align-items:center;gap:4px}
+.create-agent-card{border:1.5px dashed var(--border);border-radius:var(--radius-xl);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:10px;color:var(--text-3);cursor:pointer;min-height:170px;transition:all .2s}
+.create-agent-card:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-1)}
+.create-agent-card .plus-ring{width:40px;height:40px;border-radius:50%;background:var(--brand-1);color:var(--brand);
+  display:flex;align-items:center;justify-content:center}
+
+/* ---------- 空态页 ---------- */
+.empty-page{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--text-2)}
+.empty-icon{width:64px;height:64px;border-radius:18px;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;
+  color:var(--text-3);margin-bottom:6px}
+.empty-page h3{color:var(--text-1);font-size:16px}
+.empty-page p{font-size:13px;color:var(--text-3);max-width:360px;text-align:center;line-height:1.7}
+.empty-page .btn{margin-top:8px}
+
+/* ---------- 工具箱 ---------- */
+.toolbox-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;padding:0 32px 32px}
+.tool-card{padding:16px;border-radius:var(--radius-xl);border:.5px solid var(--stroke);display:flex;flex-direction:column;gap:10px}
+.tool-head{display:flex;align-items:center;gap:10px}
+.tool-icon{width:34px;height:34px;border-radius:9px;background:var(--brand-1);color:var(--brand);display:flex;align-items:center;justify-content:center}
+.tool-name{font-weight:600;flex:1}
+.tool-desc{color:var(--text-2);font-size:13px;line-height:1.6}
+
+/* ---------- 设置模态 ---------- */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:80;display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.show{opacity:1;pointer-events:auto}
+.settings-modal{width:min(1080px,calc(100vw - 48px));height:min(680px,calc(100vh - 64px));background:var(--bg-sidebar);
+  border-radius:var(--radius-xl);box-shadow:var(--shadow-2);display:flex;overflow:hidden;transform:translateY(10px) scale(.98);transition:transform .2s}
+.modal-overlay.show .settings-modal,.modal-overlay.show .cmdk-panel{transform:none}
+.settings-nav{width:230px;flex:none;border-right:1px solid var(--stroke);padding:18px 12px;overflow-y:auto}
+.settings-nav .nav-group-title{font-size:11px;color:var(--text-3);margin:14px 6px 6px;letter-spacing:.05em}
+.settings-nav .nav-item{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:var(--radius);color:var(--text-2);
+  cursor:pointer;font-size:13px;transition:all .15s}
+.settings-nav .nav-item:hover{background:var(--bg-active);color:var(--text-1)}
+.settings-nav .nav-item.active{background:var(--brand-1);color:var(--brand);font-weight:500}
+.settings-body{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-container)}
+.settings-topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--stroke)}
+.settings-topbar h3{font-size:16px;font-weight:600}
+.settings-content{flex:1;overflow-y:auto;padding:20px 24px}
+.settings-section-title{font-size:13px;font-weight:600;color:var(--text-2);margin:18px 0 10px}
+.settings-section-title:first-child{margin-top:0}
+.model-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border:.5px solid var(--stroke);border-radius:var(--radius-lg);
+  margin-bottom:8px;background:var(--bg-container)}
+.model-row .m-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:none}
+.model-row .m-info{flex:1;min-width:0}
+.model-row .m-name{font-weight:500;font-size:13px}
+.model-row .m-provider{font-size:12px;color:var(--text-3);margin-top:2px}
+.model-row .m-usage{font-size:12px;color:var(--text-3);white-space:nowrap}
+.member-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--stroke)}
+.member-row .avatar{width:32px;height:32px;font-size:12px}
+.member-row .m-meta{flex:1}
+.member-row .m-meta .n{font-weight:500;font-size:13px}
+.member-row .m-meta .e{font-size:12px;color:var(--text-3)}
+.member-role{font-size:12px;color:var(--text-2);border:.5px solid var(--border);border-radius:var(--radius);padding:4px 10px;
+  display:flex;align-items:center;gap:6px}
+.radio-row{display:flex;gap:10px;margin-top:8px}
+.radio-pill{display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:var(--radius-lg);border:1px solid var(--border);
+  cursor:pointer;font-size:13px;color:var(--text-2)}
+.radio-pill.on{border-color:var(--brand);color:var(--brand);background:var(--brand-1)}
+.settings-placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--text-3);text-align:center}
+
+/* ---------- ⌘K ---------- */
+.cmdk-panel{width:min(560px,calc(100vw - 48px));background:var(--bg-container);border-radius:var(--radius-xl);box-shadow:var(--shadow-pop);
+  border:.5px solid var(--stroke);overflow:hidden;transform:translateY(10px) scale(.98);transition:transform .2s;align-self:flex-start;margin-top:12vh}
+.cmdk-input{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--stroke);color:var(--text-3)}
+.cmdk-input input{flex:1;border:none;outline:none;background:transparent;font-size:15px}
+.cmdk-list{max-height:320px;overflow-y:auto;padding:8px}
+.cmdk-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius);cursor:pointer;color:var(--text-2)}
+.cmdk-item:hover,.cmdk-item.sel{background:var(--brand-1);color:var(--brand)}
+.cmdk-item .k-label{flex:1}
+.cmdk-item .k-hint{font-size:11px;color:var(--text-4)}
+.cmdk-foot{display:flex;gap:14px;padding:8px 16px;border-top:1px solid var(--stroke);font-size:11px;color:var(--text-4)}
+kbd{font-family:var(--mono);font-size:10px;border:.5px solid var(--border);border-bottom-width:1.5px;border-radius:4px;padding:1px 5px;background:var(--bg-secondary)}
+
+/* ---------- Toast ---------- */
+#toasts{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:120;display:flex;flex-direction:column;gap:8px;align-items:center}
+.toast{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.82);color:#fff;padding:9px 16px;border-radius:999px;
+  font-size:13px;box-shadow:var(--shadow-2);animation:toastIn .25s ease}
+[data-theme="dark"] .toast{background:rgba(60,60,60,.95)}
+.toast .t-ic{color:var(--brand-2)}
+.toast.out{animation:toastOut .25s ease forwards}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}}
+@keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
+
+/* 滚动条隐藏辅助 */
+.hide{display:none!important}
+</style>
+</head>
+<body>
+
+<!-- ================= 登录页 ================= -->
+<div class="login-view" id="view-login">
+  <div class="login-hero">
+    <div class="logo-row">
+      <div class="logo-mark" style="width:40px;height:40px;border-radius:11px">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none"><path d="M5 7c0-1.1.9-2 2-2h3.2c1 0 1.8.8 1.8 1.8V19c0-1-.8-1.8-1.8-1.8H7a2 2 0 0 1-2-2V7zM19 7c0-1.1-.9-2-2-2h-3.2c-1 0-1.8.8-1.8 1.8V19c0-1 .8-1.8 1.8-1.8H17a2 2 0 0 0 2-2V7z" fill="#fff"/></svg>
+      </div>
+      <h1>企业知识库</h1>
+    </div>
+    <p class="sub">RAG 问答、ReAct 智能体与 Wiki 知识库，大模型驱动的企业级知识框架</p>
+    <div class="login-features">
+      <div class="login-feature"><span class="dot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H5.5A1.5 1.5 0 0 1 4 15.5v-10zM20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h4.5a1.5 1.5 0 0 0 1.5-1.5v-10z"/></svg></span>知识库统一管理文档与问答对，秒级检索</div>
+      <div class="login-feature"><span class="dot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3M9.5 13h.01M14.5 13h.01"/></svg></span>智能体编排模型、知识与工具</div>
+      <div class="login-feature"><span class="dot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 4v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V7l7-4z"/><path d="M9.5 12l2 2 3.5-4"/></svg></span>多租户隔离，权限与企业级安全</div>
+    </div>
+  </div>
+  <div class="login-panel">
+    <form class="login-card" id="login-form">
+      <h2>欢迎登录</h2>
+      <p class="welcome">企业智能管理平台</p>
+      <label>邮箱</label>
+      <input class="login-input" type="text" value="lzy@example.com" autocomplete="off">
+      <label>密码</label>
+      <input class="login-input" type="password" value="password" autocomplete="off">
+      <button type="submit" class="login-submit">登录</button>
+      <div class="login-divider">或使用以下方式继续</div>
+      <button type="button" class="login-oidc" id="oidc-btn">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        使用 OIDC 登录
+      </button>
+      <p class="login-hint">登录以继续使用；首次使用请在下方创建账户。</p>
+    </form>
+  </div>
+</div>
+
+<!-- ================= 应用骨架 ================= -->
+<div class="app" id="app" hidden>
+  <aside class="sidebar" id="sidebar">
+    <div class="logo-row">
+      <div class="logo-box" data-nav="kb-list" title="企业知识库">
+        <span class="logo-mark">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M5 7c0-1.1.9-2 2-2h3.2c1 0 1.8.8 1.8 1.8V19c0-1-.8-1.8-1.8-1.8H7a2 2 0 0 1-2-2V7zM19 7c0-1.1-.9-2-2-2h-3.2c-1 0-1.8.8-1.8 1.8V19c0-1 .8-1.8 1.8-1.8H17a2 2 0 0 0 2-2V7z" fill="#fff"/></svg>
+        </span>
+        <span class="logo-text hide-collapsed">企业知识库</span>
+      </div>
+      <div class="logo-actions hide-collapsed">
+        <button class="icon-btn" id="cmdk-open" title="搜索 (⌘K)">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        </button>
+        <button class="icon-btn" id="collapse-btn" title="收起侧边栏">
+          <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="1.5" width="17" height="17" rx="3"/><path d="M7.5 1.5v17"/><path d="M4 7.5v5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <button class="new-chat-btn" data-nav="chat-new" title="新对话">
+      <span class="nc-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></span>
+      <span class="hide-collapsed">新对话</span>
+    </button>
+
+    <nav class="menu-scroll" id="menu-scroll">
+      <div class="menu-item" data-nav="kb-list" data-view="kb-list">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg></span>
+        <span class="mi-title hide-collapsed">知识库</span>
+        <span class="mi-badge hide-collapsed">6</span>
+      </div>
+      <div class="menu-item" data-nav="artifacts" data-view="artifacts">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6l-4.5 6L8 18M16 6l4.5 6L16 18" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="mi-title hide-collapsed">产物</span>
+      </div>
+      <div class="menu-item" data-nav="agents" data-view="agents">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 8V5m-3.5 9h.01M15.5 14h.01M9 19l-1.5 2M15 19l1.5 2"/></svg></span>
+        <span class="mi-title hide-collapsed">智能体</span>
+        <span class="mi-badge hide-collapsed">3</span>
+      </div>
+      <div class="menu-item" data-nav="toolbox" data-view="toolbox">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg></span>
+        <span class="mi-title hide-collapsed">工具箱</span>
+      </div>
+      <div class="menu-item" data-nav="organizations" data-view="organizations">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="8" width="7" height="12" rx="1.5"/><rect x="13" y="4" width="7" height="16" rx="1.5"/><path d="M6.8 11.5h.01M6.8 14.5h.01M16 8h.01M16 11.5h.01M16 15h.01"/></svg></span>
+        <span class="mi-title hide-collapsed">共享空间</span>
+      </div>
+      <div class="menu-item" id="menu-settings">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3.5l1 2.2 2.4-.5 1 2.1 2.3.8-.5 2.4 1.6 1.9-1.6 1.9.5 2.4-2.3.8-1 2.1-2.4-.5-1 2.2-1-2.2-2.4.5-1-2.1-2.3-.8.5-2.4L4.2 12l1.6-1.9-.5-2.4 2.3-.8 1-2.1 2.4.5 1-2.2z" stroke-linejoin="round"/></svg></span>
+        <span class="mi-title hide-collapsed">系统设置</span>
+      </div>
+      <div class="menu-item" id="menu-logout">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7M16 8l4 4-4 4M20 12H9.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="mi-title hide-collapsed">退出登录</span>
+      </div>
+
+      <div class="timeline-header hide-collapsed"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="th-label">我的对话</span></div>
+      <div id="session-list"></div>
+    </nav>
+
+    <div class="menu-bottom">
+      <div class="avatar">L</div>
+      <div class="user-meta hide-collapsed">
+        <div class="u-name">lzy <span class="role-tag">Owner</span></div>
+        <div class="u-role">lzy@example.com</div>
+      </div>
+      <button class="icon-btn hide-collapsed" id="theme-btn" title="切换深浅色">
+        <svg class="ic" id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19" stroke-linecap="round"/></svg>
+        <svg class="ic hide" id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5z" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="icon-btn hide-collapsed" id="logout-btn" title="退出登录">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7M16 8l4 4-4 4M20 12H9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div class="resize-handle hide-collapsed" title="拖拽调整宽度"></div>
+  </aside>
+
+  <main class="main">
+
+    <!-- ===== 知识库列表 ===== -->
+    <section class="view" id="view-kb-list">
+      <div class="page-header">
+        <div>
+          <h2>
+            <svg class="ic-lg" style="color:var(--brand)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>
+            知识库
+          </h2>
+          <p class="subtitle">管理和组织您的知识库，支持文档型和问答型知识库</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn small" title="排序">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 5v14m0 0l-3-3m3 3l3-3M17 19V5m0 0l-3 3m3-3l3 3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            更新时间
+          </button>
+          <button class="btn primary" id="create-kb-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 7A2.5 2.5 0 0 1 6 4.5h3.4a2 2 0 0 1 1.6.8l1 1.4a2 2 0 0 0 1.6.8H18A2.5 2.5 0 0 1 20.5 10v7A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17V7z"/><path d="M12 10.5v5M9.5 13h5" stroke-linecap="round"/></svg>
+            新建知识库
+          </button>
+        </div>
+      </div>
+      <div class="kb-toolbar">
+        <div class="scope-tabs" id="scope-tabs">
+          <button class="scope-tab active">全部 <span style="opacity:.65">6</span></button>
+          <button class="scope-tab">我创建的 <span style="opacity:.65">4</span></button>
+          <button class="scope-tab">共享给我 <span style="opacity:.65">2</span></button>
+          <button class="scope-tab">收藏 <span style="opacity:.65" id="fav-count">2</span></button>
+          <button class="scope-tab">最近</button>
+        </div>
+        <div class="search-box">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+          <input placeholder="搜索知识库..." id="kb-search">
+        </div>
+      </div>
+      <div class="kb-scroll">
+        <div class="kb-section">
+          <svg class="ic" style="width:14px;height:14px;color:var(--brand)" viewBox="0 0 24 24" fill="currentColor"><path d="M16 3a2 2 0 0 1 2 2v3h1a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3v2l-3-2H10a2 2 0 0 1-2-2v-1H6l-3 2v-2a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3h1V5a2 2 0 0 1 2-2h10z" opacity="0"/><path d="M12 2c2 0 4 1.6 4 4l3 .2A2 2 0 0 1 21 8v10a2 2 0 0 1-2.2 2L12 19l-6.8 1A2 2 0 0 1 3 18V8a2 2 0 0 1 2-2l3-.2C8 3.6 10 2 12 2zm0 2c-1 0-2 .8-2 2h4c0-1.2-1-2-2-2z"/></svg>
+          <span>置顶</span><span class="count">1</span>
+        </div>
+        <div class="kb-grid" id="kb-grid-pinned"></div>
+        <div class="kb-section">
+          <svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0" stroke-linecap="round"/></svg>
+          <span>我创建的</span><span class="count">4</span>
+        </div>
+        <div class="kb-grid" id="kb-grid-mine"></div>
+        <div class="kb-section">
+          <svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="8" width="7" height="12" rx="1.5"/><rect x="13" y="4" width="7" height="16" rx="1.5"/></svg>
+          <span>共享给我 · 仅查看</span><span class="count">2</span>
+        </div>
+        <div class="kb-grid" id="kb-grid-shared"></div>
+      </div>
+    </section>
+
+    <!-- ===== 知识库详情 ===== -->
+    <section class="view" id="view-kb-detail">
+      <div class="kb-detail-header">
+        <button class="back-btn" data-nav="kb-list" title="返回知识库列表">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="kb-avatar document" style="width:40px;height:40px;border-radius:11px">
+          <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>
+        </div>
+        <div class="kb-detail-title">
+          <div class="row1">
+            <h2>产品知识库</h2>
+            <span class="badge brand">文档型</span>
+            <span class="badge">知识图谱</span>
+            <span class="badge">多模态</span>
+            <span class="badge">Wiki</span>
+          </div>
+          <div class="meta">128 个文档 · 已索引 124 · 更新于 2026-10-30 · 产品部维护</div>
+        </div>
+        <div class="header-actions">
+          <button class="btn" id="batch-download-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v10m0 0l-3.5-3.5M12 14l3.5-3.5M5 18.5h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            批量下载
+          </button>
+          <button class="btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3.5l1 2.2 2.4-.5 1 2.1 2.3.8-.5 2.4 1.6 1.9-1.6 1.9.5 2.4-2.3.8-1 2.1-2.4-.5-1 2.2-1-2.2-2.4.5-1-2.1-2.3-.8.5-2.4L4.2 12l1.6-1.9-.5-2.4 2.3-.8 1-2.1 2.4.5 1-2.2z" stroke-linejoin="round"/></svg>
+            设置
+          </button>
+          <button class="btn primary" id="upload-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15V5m0 0L8.5 8.5M12 5l3.5 3.5M5 18.5h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            上传文档
+          </button>
+        </div>
+      </div>
+      <div class="doc-toolbar">
+        <div class="search-box">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+          <input placeholder="搜索文档名称..." id="doc-search">
+        </div>
+        <button class="select-chip">文件类型：全部
+          <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9.5l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="select-chip">解析状态：全部
+          <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9.5l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="select-chip">标签
+          <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9.5l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="view-toggle">
+          <button class="on" title="列表视图"><svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round"/></svg></button>
+          <button title="卡片视图"><svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg></button>
+        </div>
+      </div>
+      <div class="doc-table-wrap">
+        <table class="doc-table">
+          <thead><tr>
+            <th style="width:36px"><input type="checkbox" style="accent-color:var(--brand)"></th>
+            <th>文件名</th><th>标签</th><th>大小</th><th>状态</th><th>更新时间</th><th style="width:60px">操作</th>
+          </tr></thead>
+          <tbody id="doc-tbody"></tbody>
+        </table>
+      </div>
+      <div class="doc-table-footer">
+        <span>共 128 个文档 · 已选 0 项</span>
+        <div class="pager">
+          <button>‹</button><button class="on">1</button><button>2</button><button>3</button><button>…</button><button>11</button><button>›</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 新对话 ===== -->
+    <section class="view chat-page" id="view-chat-new">
+      <div class="chat-hero">
+        <div class="chat-title">Hi，lzy</div>
+        <div>
+          <div class="sq-caption">
+            <span>猜你想问</span>
+            <button class="icon-btn" style="width:22px;height:22px" id="sq-refresh" title="换一换">
+              <svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <div class="sq-grid" id="sq-grid"></div>
+        </div>
+        <div class="composer">
+          <div class="chips-row" id="kb-chips">
+            <span class="kb-chip"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>产品知识库<span class="x" data-remove>×</span></span>
+            <span class="kb-chip"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>客服 FAQ<span class="x" data-remove>×</span></span>
+            <button class="chip-add">+ 添加知识库</button>
+          </div>
+          <textarea id="composer-input" rows="2" placeholder="输入问题或描述任务…"></textarea>
+          <div class="composer-bottom">
+            <button class="icon-btn" title="上传附件"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7-7l8-8a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4L14.6 7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="icon-btn" title="提及">@</button>
+            <button class="icon-btn" title="工具"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg></button>
+            <button class="icon-btn" title="网络搜索"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5S9.5 5.8 12 3.5z"/></svg></button>
+            <span class="model-tag">
+              <svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg>
+              DeepSeek-V3
+            </span>
+            <button class="mode-chip" id="mode-chip" title="切换问答模式">
+              <svg class="ic spark" style="width:13px;height:13px" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.9 5.4L19 10l-5.1 1.6L12 17l-1.9-5.4L5 10l5.1-1.6L12 3zM19 15l.9 2.4L22 18l-2.1.7L19 21l-.9-2.3L16 18l2.1-.6L19 15z"/></svg>
+              <span id="mode-label">智能推理</span>
+              <svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9.5l6 6 6-6" stroke-linecap="round"/></svg>
+            </button>
+            <button class="send-btn" id="send-btn" title="发送">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5m0 0l-6 6m6-6l6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 会话中 ===== -->
+    <section class="view" id="view-chat-session">
+      <div class="thread-topbar">
+        <span class="t-title" id="session-title">产品知识问答</span>
+        <span class="badge brand">知识库 2</span>
+        <span class="badge">DeepSeek-V3</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          <button class="icon-btn" title="清空消息"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 7h15M9.5 7V5.5a1.5 1.5 0 0 1 1.5-1.5h2a1.5 1.5 0 0 1 1.5 1.5V7m3 0l-.8 11.2a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8L6 7" stroke-linecap="round"/></svg></button>
+          <button class="icon-btn" title="更多"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+      </div>
+      <div class="thread" id="thread">
+        <div class="thread-inner" id="thread-inner"></div>
+      </div>
+      <div class="chat-composer-wrap">
+        <div class="composer" style="box-shadow:var(--shadow-1)">
+          <textarea id="composer-input-2" rows="1" placeholder="输入问题或描述任务…" style="min-height:24px"></textarea>
+          <div class="composer-bottom">
+            <button class="icon-btn" title="上传附件"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7-7l8-8a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4L14.6 7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="icon-btn" title="提及">@</button>
+            <span class="model-tag">
+              <svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg>
+              DeepSeek-V3
+            </span>
+            <button class="send-btn" id="send-btn-2" title="发送">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5m0 0l-6 6m6-6l6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 智能体 ===== -->
+    <section class="view" id="view-agents">
+      <div class="page-header">
+        <div>
+          <h2>智能体</h2>
+          <p class="subtitle">把模型、知识库、工具与提示词组合成可复用的对话助手</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn primary" id="create-agent-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+            创建智能体
+          </button>
+        </div>
+      </div>
+      <div class="kb-scroll">
+        <div class="agent-grid">
+          <div class="agent-card">
+            <div class="agent-head">
+              <div class="agent-avatar" style="background:linear-gradient(135deg,#07c05f,#0aa3c2)">
+                <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 8V5m-3.5 9h.01M15.5 14h.01"/></svg>
+              </div>
+              <span class="agent-name">产品专家</span>
+              <span class="badge brand">已就绪</span>
+            </div>
+            <div class="agent-desc">精通产品手册与 FAQ，支持多轮追问与引用溯源，适合售前售后咨询场景。</div>
+            <div class="agent-meta">
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg>DeepSeek-V3</span>
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>知识库 2</span>
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z"/></svg>工具 5</span>
+            </div>
+          </div>
+          <div class="agent-card">
+            <div class="agent-head">
+              <div class="agent-avatar" style="background:linear-gradient(135deg,#7c5cff,#4f8ef7)">
+                <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>
+              </div>
+              <span class="agent-name">Wiki 助手</span>
+              <span class="badge brand">已就绪</span>
+            </div>
+            <div class="agent-desc">协同编写与审校 Wiki 页面，自动生成目录与摘要，保持知识库结构清晰。</div>
+            <div class="agent-meta">
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg>DeepSeek-V3</span>
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>知识库 1</span>
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z"/></svg>工具 8</span>
+            </div>
+          </div>
+          <div class="agent-card">
+            <div class="agent-head">
+              <div class="agent-avatar" style="background:linear-gradient(135deg,#f2995f,#ed7b2f)">
+                <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V10m5 9V5m5 14v-7m5 7V8" stroke-linecap="round"/></svg>
+              </div>
+              <span class="agent-name">数据分析</span>
+              <span class="badge warn">未就绪</span>
+            </div>
+            <div class="agent-desc">连接业务数据源，自动生成图表与分析报告。缺少 Rerank 模型，前往设置补全后可用。</div>
+            <div class="agent-meta">
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg>Qwen2.5-72B</span>
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>知识库 3</span>
+              <span><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z"/></svg>工具 4</span>
+            </div>
+          </div>
+          <div class="create-agent-card" id="create-agent-card">
+            <span class="plus-ring"><svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></span>
+            <span style="font-weight:500">创建智能体</span>
+            <span style="font-size:12px;color:var(--text-4)">组合模型、知识库与工具</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 产物 ===== -->
+    <section class="view" id="view-artifacts">
+      <div class="empty-page">
+        <div class="empty-icon"><svg class="ic" style="width:28px;height:28px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 6l-4.5 6L8 18M16 6l4.5 6L16 18" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>暂无产物</h3>
+        <p>智能体在会话中生成的文件、表格与图表会集中出现在这里，可随时预览与下载。</p>
+        <button class="btn primary" data-nav="chat-new">开始一次对话</button>
+      </div>
+    </section>
+
+    <!-- ===== 工具箱 ===== -->
+    <section class="view" id="view-toolbox">
+      <div class="page-header">
+        <div>
+          <h2>工具箱</h2>
+          <p class="subtitle">配置浏览器自动化、MCP 服务等外部工具，扩展智能体能力</p>
+        </div>
+      </div>
+      <div class="toolbox-grid">
+        <div class="tool-card">
+          <div class="tool-head">
+            <span class="tool-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><path d="M12 3.5v5M12 15.5v5M3.5 12h5M15.5 12h5"/></svg></span>
+            <span class="tool-name">浏览器自动化</span>
+            <span class="badge brand">已连接</span>
+          </div>
+          <div class="tool-desc">让智能体操作真实浏览器完成网页信息获取与表单填写。</div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-head">
+            <span class="tool-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4" width="8" height="7" rx="1.5"/><rect x="12.5" y="13" width="8" height="7" rx="1.5"/><path d="M11.5 7.5H17a2 2 0 0 1 2 2v3.5M12.5 16.5H7a2 2 0 0 1-2-2V11" stroke-linecap="round"/></svg></span>
+            <span class="tool-name">MCP 服务</span>
+            <span class="badge">3 个已启用</span>
+          </div>
+          <div class="tool-desc">接入 Model Context Protocol 服务，为智能体挂载外部工具与数据源。</div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-head">
+            <span class="tool-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5S9.5 5.8 12 3.5z"/></svg></span>
+            <span class="tool-name">网络搜索</span>
+            <span class="badge">已启用</span>
+          </div>
+          <div class="tool-desc">回答时自动检索互联网，补充知识库之外的信息。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 共享空间 ===== -->
+    <section class="view" id="view-organizations">
+      <div class="empty-page">
+        <div class="empty-icon"><svg class="ic" style="width:28px;height:28px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="7" height="12" rx="1.5"/><rect x="13" y="4" width="7" height="16" rx="1.5"/></svg></div>
+        <h3>暂无共享空间</h3>
+        <p>创建共享空间，与团队成员协作管理知识库与智能体；也可以通过邀请码加入他人创建的空间。</p>
+        <button class="btn primary" id="create-org-btn">创建共享空间</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ================= 系统设置 ================= -->
+<div class="modal-overlay" id="settings-overlay">
+  <div class="settings-modal">
+    <div class="settings-nav" id="settings-nav">
+      <div class="nav-group-title">账户</div>
+      <div class="nav-item active" data-pane="models"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9.5h.01M9 14.5h.01M14.5 9.5h.01M14.5 14.5h.01"/></svg>常规设置</div>
+      <div class="nav-item" data-pane="profile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0" stroke-linecap="round"/></svg>用户信息</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4h9l4 4v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 4v5h5"/></svg>我的记忆</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="9" rx="2"/><path d="M8 10V7.5A4 4 0 0 1 16 7.5V10M12 13.5v2.5"/></svg>环境变量</div>
+      <div class="nav-group-title">空间</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/></svg>空间信息</div>
+      <div class="nav-item" data-pane="members"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 6M17.5 14a5.5 5.5 0 0 1 3 5" stroke-linecap="round"/></svg>成员管理</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16v10a2 2 0 0 1-2 2H8l-4 3.5V6z" stroke-linejoin="round"/></svg>消息管理</div>
+      <div class="nav-group-title">模型</div>
+      <div class="nav-item" data-pane="models"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 9h16M9 9v11"/></svg>模型管理</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M7.5 8h.01M7.5 17h.01"/></svg>Ollama</div>
+      <div class="nav-group-title">数据与扩展</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg>向量数据库引擎</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5h14M5 5v3.5M5 5h3.5M19 5v3.5M19 5h-3.5M9.5 12L5 16.5M14.5 12L19 16.5M12 9.5V19" stroke-linecap="round"/></svg>解析引擎</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 17a4.5 4.5 0 0 1-.9-8.9 5.5 5.5 0 0 1 10.8 1A4 4 0 0 1 17 17H7z" stroke-linejoin="round"/></svg>存储引擎</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6l-4.5 6L8 18M16 6l4.5 6L16 18" stroke-linecap="round" stroke-linejoin="round"/></svg>沙箱</div>
+      <div class="nav-item" data-pane="placeholder"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>网络搜索</div>
+    </div>
+    <div class="settings-body">
+      <div class="settings-topbar">
+        <h3 id="settings-title">模型管理</h3>
+        <button class="icon-btn" id="settings-close" title="关闭">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="settings-content" id="settings-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= ⌘K 命令面板 ================= -->
+<div class="modal-overlay" id="cmdk-overlay">
+  <div class="cmdk-panel">
+    <div class="cmdk-input">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      <input id="cmdk-input" placeholder="搜索知识库、智能体或输入命令…" autocomplete="off">
+      <kbd>ESC</kbd>
+    </div>
+    <div class="cmdk-list" id="cmdk-list"></div>
+    <div class="cmdk-foot"><span><kbd>↵</kbd> 选择</span><span><kbd>↑</kbd><kbd>↓</kbd> 切换</span><span><kbd>⌘</kbd><kbd>K</kbd> 打开/关闭</span></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+/* ================= 工具函数 ================= */
+var $ = function(s, el){ return (el||document).querySelector(s); };
+var $$ = function(s, el){ return Array.prototype.slice.call((el||document).querySelectorAll(s)); };
+function toast(msg, ok){
+  var box = $('#toasts');
+  var t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = (ok === false
+    ? '<svg class="ic t-ic" style="color:#ff8a93" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5m0 3h.01" stroke-linecap="round"/></svg>'
+    : '<svg class="ic t-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.5l2.5 2.5 4.5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+    + '<span></span>';
+  t.lastElementChild.textContent = msg;
+  box.appendChild(t);
+  setTimeout(function(){ t.classList.add('out'); setTimeout(function(){ t.remove(); }, 260); }, 2400);
+}
+
+/* ================= 主题 ================= */
+function setTheme(mode){
+  document.documentElement.setAttribute('data-theme', mode);
+  $('#theme-icon-sun').classList.toggle('hide', mode === 'dark');
+  $('#theme-icon-moon').classList.toggle('hide', mode !== 'dark');
+}
+$('#theme-btn').addEventListener('click', function(){
+  var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  setTheme(next);
+});
+
+/* ================= 侧边栏 ================= */
+$('#collapse-btn').addEventListener('click', function(){ $('#sidebar').classList.add('collapsed'); });
+$('#sidebar').addEventListener('dblclick', function(e){
+  if (e.target.closest('.menu-scroll') || e.target.closest('.menu-bottom')) return;
+});
+(function(){
+  var handle = $('.resize-handle');
+  var startX = 0, startW = 0;
+  function onMove(e){ var w = Math.min(360, Math.max(200, startW + e.clientX - startX)); document.documentElement.style.setProperty('--sidebar-w', w + 'px'); }
+  function onUp(){ document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; }
+  handle.addEventListener('mousedown', function(e){
+    startX = e.clientX; startW = $('#sidebar').getBoundingClientRect().width;
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize'; e.preventDefault();
+  });
+})();
+
+/* ================= 视图切换 ================= */
+var VIEWS = ['kb-list','kb-detail','chat-new','chat-session','agents','artifacts','toolbox','organizations'];
+var currentView = 'kb-list';
+function showView(name){
+  if (VIEWS.indexOf(name) < 0) name = 'kb-list';
+  currentView = name;
+  VIEWS.forEach(function(v){ $('#view-' + v).classList.toggle('active', v === name); });
+  $$('.menu-item[data-view]').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-view') === name);
+  });
+}
+document.addEventListener('click', function(e){
+  var nav = e.target.closest('[data-nav]');
+  if (nav){ showView(nav.getAttribute('data-nav')); }
+});
+
+/* ================= 会话列表 ================= */
+var SESSIONS = [
+  { group: '今天', items: [
+    { id: 's1', title: '产品 FAQ 整理', view: 'chat-session' },
+    { id: 's2', title: '新员工入职指引生成', view: 'chat-session' }
+  ]},
+  { group: '昨天', items: [
+    { id: 's3', title: '合同条款对比分析', view: 'chat-session' },
+    { id: 's4', title: 'Wiki 页面审校', view: 'chat-session' }
+  ]},
+  { group: '7 天内', items: [
+    { id: 's5', title: '知识库导入方案调研', view: 'chat-session' },
+    { id: 's6', title: '竞品功能摘要', view: 'chat-session' },
+    { id: 's7', title: '季度汇报大纲', view: 'chat-session' }
+  ]}
+];
+function renderSessions(){
+  var box = $('#session-list');
+  box.innerHTML = '';
+  SESSIONS.forEach(function(g){
+    g.items.forEach(function(it){
+      var row = document.createElement('div');
+      row.className = 'session-row';
+      row.setAttribute('data-session', it.id);
+      row.innerHTML = '<svg class="ic" style="width:14px;height:14px;flex:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16v10a2 2 0 0 1-2 2H8l-4 3.5V6z" stroke-linejoin="round"/></svg><span class="s-title"></span>';
+      $('.s-title', row).textContent = it.title;
+      row.addEventListener('click', function(){
+        $$('.session-row').forEach(function(r){ r.classList.remove('active'); });
+        row.classList.add('active');
+        $('#session-title').textContent = it.title;
+        if (!$('#view-chat-session').classList.contains('active')) showView('chat-session');
+      });
+      box.appendChild(row);
+    });
+  });
+}
+renderSessions();
+
+/* ================= 知识库列表 ================= */
+var KBS = {
+  pinned: [
+    { name: '产品知识库', type: 'document', desc: '产品手册、操作指南与版本说明，售前售后首选知识来源。', docs: 128, kg: true, mm: true, wiki: true, who: '我', time: '更新于 10-30', org: '' }
+  ],
+  mine: [
+    { name: '研发技术文档', type: 'document', desc: '架构设计、接口规范与部署运维手册，研发团队知识沉淀。', docs: 342, kg: true, time: '更新于 10-31', who: '我', org: '' },
+    { name: '客服 FAQ', type: 'faq', desc: '高频客户问题与标准答复话术，支持问答对直接检索。', docs: 96, time: '更新于 10-29', who: '我', org: '' },
+    { name: '新员工入职指南', type: 'document', desc: '入职流程、制度说明与常用系统入口，配套 Wiki 维护。', docs: 45, wiki: true, time: '更新于 10-27', who: '我', org: '' },
+    { name: '市场品牌素材', type: 'document', desc: '品牌规范、海报素材与宣传文案，支持图片多模态检索。', docs: 67, mm: true, time: '更新于 10-25', who: '我', org: '' }
+  ],
+  shared: [
+    { name: '制度合规中心', type: 'document', desc: '公司制度、合规要求与审计要点，由合规部统一维护。', docs: 210, kg: true, time: '更新于 10-30', who: '张伟', org: '合规与风控部' },
+    { name: '财务报销制度', type: 'faq', desc: '报销流程、标准与常见问题解答。', docs: 58, time: '更新于 10-28', who: '李娜', org: '财务部' }
+  ]
+};
+function kbCard(kb, shared){
+  var el = document.createElement('div');
+  el.className = 'kb-card';
+  var badges = '<span class="badge brand"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 5h7l4 4v10H7z" stroke-linejoin="round"/><path d="M14 5v4h4"/></svg>' + kb.docs + '</span>';
+  if (kb.type === 'faq') badges = '<span class="badge brand"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16v10a2 2 0 0 1-2 2H8l-4 3.5V6z" stroke-linejoin="round"/></svg>' + kb.docs + '</span>';
+  if (kb.kg) badges += '<span class="badge" title="知识图谱"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="17" r="2.5"/><path d="M8.2 7l7.4.8M7.4 8.2l3.4 6.5M16.6 10l-3.4 4.8"/></svg></span>';
+  if (kb.mm) badges += '<span class="badge" title="多模态"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4 16.5L9.5 12l4 3.5 3-2.5 3.5 3"/></svg></span>';
+  if (kb.wiki) badges += '<span class="badge" title="Wiki">Wiki</span>';
+  var footer = '<div class="mini-avatar">' + kb.who.charAt(0) + '</div><span>' + kb.who + '</span><span>' + kb.time + '</span><span class="spacer"></span>';
+  if (kb.org) footer += '<span class="org-chip"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="8" width="7" height="12" rx="1.5"/><rect x="13" y="4" width="7" height="16" rx="1.5"/></svg>' + kb.org + '</span>';
+  el.innerHTML =
+    '<button class="fav-star' + (kb.fav ? ' on' : '') + '" title="收藏" style="background:none;border:none;display:flex"><svg class="ic" viewBox="0 0 24 24" fill="' + (kb.fav ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.8"><path d="M12 3.5l2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16.9l-5.3 2.7 1-5.8-4.2-4.1 5.9-.9L12 3.5z" stroke-linejoin="round"/></svg></button>' +
+    '<div class="card-header">' +
+      '<span class="kb-avatar ' + kb.type + '">' +
+        (kb.type === 'faq'
+          ? '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16v10a2 2 0 0 1-2 2H8l-4 3.5V6z" stroke-linejoin="round"/></svg>'
+          : '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg>') +
+      '</span>' +
+      '<span class="card-title" title="' + kb.name + '">' + kb.name + '</span>' +
+      '<button class="more-btn" title="更多" style="display:flex"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>' +
+    '</div>' +
+    '<div class="card-desc' + (kb.desc ? '' : ' empty') + '">' + (kb.desc || '暂无描述') + '</div>' +
+    '<div class="badges">' + badges + '</div>' +
+    '<div class="card-footer">' + footer + '</div>';
+  $('.fav-star', el).addEventListener('click', function(e){
+    e.stopPropagation();
+    kb.fav = !kb.fav;
+    this.classList.toggle('on', kb.fav);
+    $('svg', this).setAttribute('fill', kb.fav ? 'currentColor' : 'none');
+    $('#fav-count').textContent = String(2 + (kb.fav ? 1 : 0) - (kb._favStart ? 1 : 0));
+    toast(kb.fav ? '已收藏「' + kb.name + '」' : '已取消收藏');
+  });
+  $('.more-btn', el).addEventListener('click', function(e){ e.stopPropagation(); toast('更多操作：查看详情 / 创建副本 / 删除'); });
+  el.addEventListener('click', function(){
+    $('#session-title').textContent = kb.name;
+    showView('kb-detail');
+  });
+  return el;
+}
+function renderKbs(){
+  var gp = $('#kb-grid-pinned'), gm = $('#kb-grid-mine'), gs = $('#kb-grid-shared');
+  gp.innerHTML = ''; gm.innerHTML = ''; gs.innerHTML = '';
+  KBS.pinned.forEach(function(kb){ gp.appendChild(kbCard(kb, false)); });
+  KBS.mine.forEach(function(kb){ gm.appendChild(kbCard(kb, false)); });
+  KBS.shared.forEach(function(kb){ gs.appendChild(kbCard(kb, true)); });
+}
+renderKbs();
+$('#scope-tabs').addEventListener('click', function(e){
+  var tab = e.target.closest('.scope-tab');
+  if (!tab) return;
+  $$('.scope-tab').forEach(function(t){ t.classList.remove('active'); });
+  tab.classList.add('active');
+});
+$('#kb-search').addEventListener('input', function(){
+  var q = this.value.trim().toLowerCase();
+  $$('.kb-card').forEach(function(card){
+    var name = $('.card-title', card).textContent.toLowerCase();
+    var desc = $('.card-desc', card).textContent.toLowerCase();
+    card.style.display = (!q || name.indexOf(q) > -1 || desc.indexOf(q) > -1) ? '' : 'none';
+  });
+});
+$('#create-kb-btn').addEventListener('click', function(){ toast('演示环境：新建知识库向导未开放'); });
+
+/* ================= 知识库详情：文档表 ================= */
+var DOCS = [
+  { name: '产品操作手册v2.3.pdf', icon: 'pdf', size: '8.2 MB', status: 'ok', time: '2026-10-30 14:22', tags: ['产品'] },
+  { name: '快速入门指南.docx', icon: 'doc', size: '1.1 MB', status: 'ok', time: '2026-10-30 11:08', tags: [] },
+  { name: '常见问题集.md', icon: 'md', size: '386 KB', status: 'ok', time: '2026-10-29 18:40', tags: ['FAQ'] },
+  { name: 'API 接口文档.pdf', icon: 'pdf', size: '5.4 MB', status: 'run', progress: 64, time: '2026-10-29 09:15', tags: ['研发'] },
+  { name: '竞品对比分析.xlsx', icon: 'xls', size: '2.3 MB', status: 'ok', time: '2026-10-28 16:02', tags: ['市场'] },
+  { name: '部署运维手册.pdf', icon: 'pdf', size: '12.8 MB', status: 'fail', time: '2026-10-27 20:31', tags: ['研发'] },
+  { name: '品牌视觉规范.png', icon: 'img', size: '4.6 MB', status: 'ok', time: '2026-10-26 10:11', tags: ['品牌', '多模态'] },
+  { name: '季度路线图.pptx', icon: 'ppt', size: '6.8 MB', status: 'ok', time: '2026-10-25 15:47', tags: ['产品'] }
+];
+var STATUS_TEXT = { ok: '已完成', run: '解析中', fail: '失败' };
+function docRow(d){
+  var tr = document.createElement('tr');
+  tr.className = 'clickable';
+  var statusHtml = '';
+  if (d.status === 'ok') statusHtml = '<span class="status-cell status-ok"><span class="status-dot"></span>已完成</span>';
+  if (d.status === 'run') statusHtml = '<span class="status-cell status-run"><span class="status-dot"></span><span>解析中</span><span class="progress-line"><i style="width:' + (d.progress || 30) + '%"></i></span></span>';
+  if (d.status === 'fail') statusHtml = '<span class="status-cell status-fail"><span class="status-dot"></span>失败 · <u style="cursor:pointer">重试</u></span>';
+  var tags = (d.tags || []).map(function(t){ return '<span class="tag-chip">' + t + '</span>'; }).join('') || '<span style="color:var(--text-4)">—</span>';
+  tr.innerHTML =
+    '<td><input type="checkbox" style="accent-color:var(--brand)"></td>' +
+    '<td><span class="doc-name"><span class="doc-icon ' + d.icon + '">' + d.icon.toUpperCase() + '</span><span class="d-name"></span></span></td>' +
+    '<td>' + tags + '</td>' +
+    '<td>' + d.size + '</td>' +
+    '<td>' + statusHtml + '</td>' +
+    '<td style="white-space:nowrap">' + d.time + '</td>' +
+    '<td><button class="icon-btn" style="width:26px;height:26px"><svg class="ic" style="width:14px;height:14px" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button></td>';
+  $('.d-name', tr).textContent = d.name;
+  $('.icon-btn', tr).addEventListener('click', function(e){ e.stopPropagation(); toast('文档操作：预览 / 重建知识 / 下载 / 删除'); });
+  tr.addEventListener('click', function(e){
+    if (e.target.tagName === 'INPUT') return;
+    toast('打开文档：' + d.name);
+  });
+  return tr;
+}
+function renderDocs(filter){
+  var tbody = $('#doc-tbody');
+  tbody.innerHTML = '';
+  DOCS.forEach(function(d){
+    if (filter && d.name.toLowerCase().indexOf(filter.toLowerCase()) < 0) return;
+    tbody.appendChild(docRow(d));
+  });
+}
+renderDocs();
+$('#doc-search').addEventListener('input', function(){ renderDocs(this.value.trim()); });
+$('#upload-btn').addEventListener('click', function(){
+  var d = { name: '季度汇报.pptx', icon: 'ppt', size: '3.9 MB', status: 'run', progress: 12, time: '刚刚', tags: ['产品'] };
+  DOCS.unshift(d);
+  renderDocs($('#doc-search').value.trim());
+  toast('已开始上传并解析「季度汇报.pptx」');
+  setTimeout(function(){
+    d.status = 'ok';
+    renderDocs($('#doc-search').value.trim());
+    toast('「季度汇报.pptx」解析完成');
+  }, 6000);
+});
+$('#batch-download-btn').addEventListener('click', function(){ toast('已开始打包 ZIP，最多 200 项 / 512 MiB'); });
+
+/* ================= 推荐问题 ================= */
+var QUESTIONS = [
+  'WeKnora 支持哪些文档解析引擎？',
+  '如何创建一个 FAQ 型知识库？',
+  '多模态解析需要配置什么模型？',
+  '知识图谱是怎么构建的？',
+  '如何批量导入企业制度文档？',
+  '智能体和普通问答模式有什么区别？'
+];
+var QUESTIONS_ALT = [
+  '知识库支持哪些文件格式？',
+  '如何为文档打标签并按标签筛选？',
+  'Rerank 模型在检索里起什么作用？',
+  '如何把知识库共享给其他部门？',
+  '会话记录可以自动沉淀到知识库吗？',
+  '如何查看模型用量统计？'
+];
+function renderQuestions(list){
+  var grid = $('#sq-grid');
+  grid.innerHTML = '';
+  list.forEach(function(q){
+    var b = document.createElement('button');
+    b.className = 'sq-card';
+    b.type = 'button';
+    b.textContent = q;
+    b.addEventListener('click', function(){ sendFromComposer(q); });
+    grid.appendChild(b);
+  });
+}
+renderQuestions(QUESTIONS);
+var sqAlt = false;
+$('#sq-refresh').addEventListener('click', function(){
+  sqAlt = !sqAlt;
+  renderQuestions(sqAlt ? QUESTIONS_ALT : QUESTIONS);
+});
+
+/* ================= 输入与对话 ================= */
+var agentMode = true;
+$('#mode-chip').addEventListener('click', function(){
+  agentMode = !agentMode;
+  $('#mode-label').textContent = agentMode ? '智能推理' : '快速问答';
+  toast(agentMode ? '已切换到智能推理：多步思考，深度分析' : '已切换到快速问答：基于知识库的 RAG 问答');
+});
+$$('#kb-chips .x').forEach(function(x){
+  x.addEventListener('click', function(){ x.parentElement.remove(); });
+});
+$('#kb-chips').addEventListener('click', function(e){
+  if (e.target.classList.contains('chip-add')) toast('演示环境：知识库选择器未开放');
+});
+
+var CANNED_ANSWER =
+  '根据「产品知识库」检索到的资料，为你整理如下：\n\n' +
+  '1. WeKnora 内置多种解析引擎，PDF、Office 文档默认使用内置解析器，可按需切换 OCR 增强方案 [1]；\n' +
+  '2. 文本与 Markdown 走轻量分块通道，解析速度更快，适合纯文本知识沉淀 [1]；\n' +
+  '3. 图片类文档可开启多模态解析，由 VLM 提取图中文字与语义，便于后续检索 [2]。\n\n' +
+  '以上内容引用自《产品操作手册》第 3 章 [1] 与《常见问题集》 [2]，点击角标可查看原文片段。';
+
+function addAnswerBlock(q, stream){
+  var inner = $('#thread-inner');
+  var wrap = document.createElement('div');
+  wrap.className = 'msg-ai';
+  wrap.innerHTML =
+    '<div class="ai-avatar"><svg class="ic" viewBox="0 0 24 24" fill="none"><path d="M5 7c0-1.1.9-2 2-2h3.2c1 0 1.8.8 1.8 1.8V19c0-1-.8-1.8-1.8-1.8H7a2 2 0 0 1-2-2V7zM19 7c0-1.1-.9-2-2-2h-3.2c-1 0-1.8.8-1.8 1.8V19c0-1 .8-1.8 1.8-1.8H17a2 2 0 0 0 2-2V7z" fill="#fff"/></svg></div>' +
+    '<div class="msg-ai-body">' +
+      '<div class="think-block">' +
+        '<div class="think-head"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.9 5.4L19 10l-5.1 1.6L12 17l-1.9-5.4L5 10l5.1-1.6L12 3z"/></svg><span>思考过程 · 检索 2 个知识库 · 命中 6 个片段</span>' +
+        '<svg class="ic chev" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9.5l6 6 6-6" stroke-linecap="round"/></svg></div>' +
+        '<div class="think-body">已调用知识检索工具，在「产品知识库」「客服 FAQ」中召回 6 个候选片段，经 Rerank 重排后保留前 3 个作为引用依据，随后组织语言作答。</div>' +
+      '</div>' +
+      '<div class="answer"></div>' +
+      '<div class="refs-row">' +
+        '<span class="ref-label">引用 2 篇资料</span>' +
+        '<div class="ref-card"><span class="ref-idx">1</span>产品操作手册v2.3.pdf · 第 3 章 解析引擎<span class="ref-meta">相似度 0.92</span></div>' +
+        '<div class="ref-card"><span class="ref-idx">2</span>常见问题集.md · 片段 12<span class="ref-meta">相似度 0.87</span></div>' +
+      '</div>' +
+    '</div>';
+  var answer = $('.answer', wrap);
+  var refs = $('.refs-row', wrap);
+  refs.style.display = 'none';
+  inner.appendChild(wrap);
+  $$('.think-head', wrap).forEach(function(h){
+    h.addEventListener('click', function(){ h.parentElement.classList.toggle('open'); });
+  });
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  var refsEls = $$('.ref-card', wrap);
+  refsEls.forEach(function(r){ r.addEventListener('click', function(){ toast('打开引用原文'); }); });
+
+  var full = CANNED_ANSWER.replace(/\[(\d)\]/g, '<span class="cite" data-cite="$1">$1</span>');
+  if (!stream){
+    answer.innerHTML = full;
+    refs.style.display = '';
+    bindCites(answer);
+    return;
+  }
+  // 模拟流式输出：先逐字吐纯文本，结束后一次性渲染引用角标
+  var plain = CANNED_ANSWER;
+  var i = 0;
+  var timer = setInterval(function(){
+    i += 2 + Math.floor(Math.random() * 3);
+    if (i >= plain.length){
+      clearInterval(timer);
+      answer.innerHTML = full;
+      bindCites(answer);
+      refs.style.display = '';
+      sendBtnStop(false, $('#send-btn-2'));
+      wrap.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+    answer.textContent = plain.slice(0, i);
+    var caret = document.createElement('i');
+    caret.className = 'caret';
+    answer.appendChild(caret);
+    var thread = $('#thread');
+    thread.scrollTop = thread.scrollHeight;
+  }, 24);
+}
+function bindCites(root){
+  $$('.cite', root).forEach(function(c){
+    c.addEventListener('click', function(){ toast('查看引用 [' + c.textContent + '] 原文片段'); });
+  });
+}
+function addUserMsg(text){
+  var inner = $('#thread-inner');
+  var div = document.createElement('div');
+  div.className = 'msg-user';
+  div.textContent = text;
+  inner.appendChild(div);
+  $('#thread').scrollTop = $('#thread').scrollHeight;
+}
+function sendFromComposer(text){
+  text = (text || '').trim();
+  if (!text) return;
+  var wasNew = $('#view-chat-new').classList.contains('active');
+  if (wasNew) showView('chat-session');
+  addUserMsg(text);
+  var btn = wasNew ? $('#send-btn') : $('#send-btn-2');
+  if (wasNew){
+    sendBtnStop(true, btn);
+  }
+  addAnswerBlock(text, true);
+  sendBtnStop(true, wasNew ? $('#send-btn') : $('#send-btn-2'));
+}
+function sendBtnStop(stopping, btn){
+  if (!btn) return;
+  btn.classList.toggle('stop', !!stopping);
+  btn.innerHTML = stopping
+    ? '<svg class="ic" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>'
+    : '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5m0 0l-6 6m6-6l6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+$('#send-btn').addEventListener('click', function(){
+  var v = $('#composer-input').value;
+  $('#composer-input').value = '';
+  sendFromComposer(v);
+});
+$('#composer-input').addEventListener('keydown', function(e){
+  if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); var v = this.value; this.value = ''; sendFromComposer(v); }
+});
+$('#send-btn-2').addEventListener('click', function(){
+  var v = $('#composer-input-2').value;
+  $('#composer-input-2').value = '';
+  sendFromComposer(v);
+});
+$('#composer-input-2').addEventListener('keydown', function(e){
+  if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); var v = this.value; this.value = ''; sendFromComposer(v); }
+});
+
+/* 会话页预置对话 */
+function seedThread(){
+  $('#thread-inner').innerHTML = '';
+  addUserMsg('帮我总结一下新员工入职流程需要准备哪些材料');
+  addAnswerBlock('', false);
+  var th = $('.think-block', $('#thread-inner').lastElementChild);
+  th.classList.add('open');
+  addUserMsg('试用期考核标准是什么？');
+}
+$('#view-chat-session').addEventListener('transitionend', function(){}, { once: true });
+
+/* ================= 智能体 ================= */
+$('#create-agent-btn').addEventListener('click', function(){ toast('演示环境：智能体编辑器未开放'); });
+$('#create-agent-card').addEventListener('click', function(){ toast('演示环境：智能体编辑器未开放'); });
+
+/* ================= 其他页面 ================= */
+$('#create-org-btn').addEventListener('click', function(){ toast('演示环境：创建共享空间未开放'); });
+
+/* ================= 设置模态 ================= */
+var SETTINGS_TITLE = { models: '常规设置', profile: '用户信息', members: '成员管理', placeholder: '' };
+var MODELS = [
+  { group: '对话模型', name: 'DeepSeek-V3', provider: '阿里云百炼 · 2026-10-01 配置', usage: '本月 1.2M tokens', color: 'linear-gradient(135deg,#4f8ef7,#7c5cff)' },
+  { group: '对话模型', name: 'Qwen2.5-72B-Instruct', provider: '本地 vLLM · 2026-09-12 配置', usage: '本月 340K tokens', color: 'linear-gradient(135deg,#07c05f,#0aa3c2)' },
+  { group: 'Embedding 模型', name: 'Qwen3-Embedding-8B', provider: '阿里云百炼 · 2026-09-12 配置', usage: '本月 8.6M tokens', color: 'linear-gradient(135deg,#f2995f,#ed7b2f)' },
+  { group: 'Rerank 模型', name: 'Qwen3-Reranker-8B', provider: '阿里云百炼 · 2026-09-12 配置', usage: '本月 5.1M tokens', color: 'linear-gradient(135deg,#00a870,#038626)' },
+  { group: 'VLM 多模态', name: 'Qwen2.5-VL-72B', provider: '本地 vLLM · 2026-10-02 配置', usage: '本月 96K tokens', color: 'linear-gradient(135deg,#e34d59,#c9353f)' }
+];
+var MEMBERS = [
+  { name: 'lzy（我）', email: 'lzy@example.com', role: 'Owner', grad: 'linear-gradient(135deg,#07c05f,#0aa3c2)' },
+  { name: '张伟', email: 'zhangwei@example.com', role: 'Admin', grad: 'linear-gradient(135deg,#4f8ef7,#2b6de0)' },
+  { name: '李娜', email: 'lina@example.com', role: 'Contributor', grad: 'linear-gradient(135deg,#7c5cff,#b04fe0)' },
+  { name: '王芳', email: 'wangfang@example.com', role: 'Viewer', grad: 'linear-gradient(135deg,#f2995f,#ed7b2f)' }
+];
+var currentPane = 'models';
+function renderSettings(){
+  var box = $('#settings-content');
+  if (currentPane === 'models'){
+    box.innerHTML = '<button class="btn primary" id="add-model-btn" style="margin-bottom:16px"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>添加模型</button><div id="model-groups"></div>';
+    var groups = {};
+    MODELS.forEach(function(m){ (groups[m.group] = groups[m.group] || []).push(m); });
+    var gbox = $('#model-groups');
+    Object.keys(groups).forEach(function(g){
+      var sec = document.createElement('div');
+      sec.innerHTML = '<div class="settings-section-title">' + g + '</div>';
+      groups[g].forEach(function(m){
+        var row = document.createElement('div');
+        row.className = 'model-row';
+        row.innerHTML =
+          '<span class="m-icon" style="background:' + m.color + ';color:#fff"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg></span>' +
+          '<div class="m-info"><div class="m-name"></div><div class="m-provider"></div></div>' +
+          '<span class="badge brand">已连接</span><span class="m-usage">' + m.usage + '</span>' +
+          '<button class="icon-btn" title="编辑"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 19.5l1-4L16 5a2.1 2.1 0 0 1 3 3L8.5 18.5l-4 1z" stroke-linejoin="round"/></svg></button>' +
+          '<button class="icon-btn" title="删除"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 7h15M9.5 7V5.5A1.5 1.5 0 0 1 11 4h2a1.5 1.5 0 0 1 1.5 1.5V7m3 0l-.8 11.2a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8L6 7" stroke-linecap="round"/></svg></button>';
+        $('.m-name', row).textContent = m.name;
+        $('.m-provider', row).textContent = m.provider;
+        $$('button.icon-btn', row).forEach(function(b){
+          b.addEventListener('click', function(){ toast('演示环境：模型编辑未开放'); });
+        });
+        sec.appendChild(row);
+      });
+      gbox.appendChild(sec);
+    });
+    $('#add-model-btn').addEventListener('click', function(){ toast('演示环境：添加模型未开放'); });
+    return;
+  }
+  if (currentPane === 'members'){
+    var html = '<p style="color:var(--text-3);font-size:13px;margin-bottom:14px">邀请伙伴加入当前空间并分配角色。只有 Owner 可以新增或移除成员。</p>';
+    html += '<button class="btn primary" id="invite-btn" style="margin-bottom:10px">邀请成员</button>';
+    box.innerHTML = html;
+    MEMBERS.forEach(function(m){
+      var row = document.createElement('div');
+      row.className = 'member-row';
+      row.innerHTML =
+        '<div class="avatar" style="background:' + m.grad + '">' + m.name.charAt(0) + '</div>' +
+        '<div class="m-meta"><div class="n"></div><div class="e"></div></div>' +
+        '<span class="member-role">' + m.role + '<svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9.5l6 6 6-6" stroke-linecap="round"/></svg></span>';
+      $('.n', row).textContent = m.name;
+      $('.e', row).textContent = m.email;
+      $('.member-role', row).addEventListener('click', function(){ toast('演示环境：角色调整未开放'); });
+      box.appendChild(row);
+    });
+    $('#invite-btn').addEventListener('click', function(){ toast('邀请链接已复制（演示）'); });
+    return;
+  }
+  if (currentPane === 'profile'){
+    box.innerHTML =
+      '<div class="settings-section-title">基础信息</div>' +
+      '<div class="member-row"><div class="avatar">L</div><div class="m-meta"><div class="n">lzy</div><div class="e">lzy@example.com</div></div><span class="badge brand">Owner</span></div>' +
+      '<div class="settings-section-title">界面偏好</div>' +
+      '<div class="radio-row">' +
+        '<span class="radio-pill on" id="pref-light">浅色模式</span>' +
+        '<span class="radio-pill" id="pref-dark">深色模式</span>' +
+      '</div>' +
+      '<div class="settings-section-title">安全</div>' +
+      '<button class="btn" id="pwd-btn">修改密码</button>';
+    $('#pref-light').addEventListener('click', function(){ setTheme('light'); syncPref(); });
+    $('#pref-dark').addEventListener('click', function(){ setTheme('dark'); syncPref(); });
+    function syncPref(){
+      var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      $('#pref-light').classList.toggle('on', !dark);
+      $('#pref-dark').classList.toggle('on', dark);
+    }
+    $('#pwd-btn').addEventListener('click', function(){ toast('演示环境：修改密码未开放'); });
+    return;
+  }
+  // placeholder 分区
+  var label = $('#settings-nav .nav-item.active').textContent.trim();
+  box.innerHTML =
+    '<div class="settings-placeholder">' +
+      '<div class="empty-icon"><svg class="ic" style="width:26px;height:26px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 3.5l1 2.2 2.4-.5 1 2.1 2.3.8-.5 2.4 1.6 1.9-1.6 1.9.5 2.4-2.3.8-1 2.1-2.4-.5-1 2.2-1-2.2-2.4.5-1-2.1-2.3-.8.5-2.4L4.2 12l1.6-1.9-.5-2.4 2.3-.8 1-2.1 2.4.5 1-2.2z"/></svg></div>' +
+      '<h3 style="color:var(--text-1);font-size:15px"></h3>' +
+      '<p style="font-size:13px;max-width:300px;line-height:1.7">此分区在演示页面中未包含详细配置，可在真实系统的系统设置中查看。</p>' +
+    '</div>';
+  box.querySelector('h3').textContent = label;
+}
+$('#settings-nav').addEventListener('click', function(e){
+  var item = e.target.closest('.nav-item');
+  if (!item) return;
+  $$('.nav-item', $('#settings-nav')).forEach(function(n){ n.classList.remove('active'); });
+  item.classList.add('active');
+  currentPane = item.getAttribute('data-pane');
+  $('#settings-title').textContent = item.textContent.trim();
+  renderSettings();
+});
+function openSettings(){
+  var active = $('#settings-nav .nav-item.active');
+  if (active) $('#settings-title').textContent = active.textContent.trim();
+  renderSettings();
+  $('#settings-overlay').classList.add('show');
+}
+function closeSettings(){ $('#settings-overlay').classList.remove('show'); }
+$('#menu-settings').addEventListener('click', openSettings);
+$('#settings-close').addEventListener('click', closeSettings);
+$('#settings-overlay').addEventListener('click', function(e){ if (e.target === this) closeSettings(); });
+
+/* ================= ⌘K ================= */
+var CMDK = [
+  { label: '新建对话', hint: 'N', run: function(){ showView('chat-new'); } },
+  { label: '打开知识库', hint: '', run: function(){ showView('kb-list'); } },
+  { label: '打开智能体', hint: '', run: function(){ showView('agents'); } },
+  { label: '打开产物库', hint: '', run: function(){ showView('artifacts'); } },
+  { label: '打开工具箱', hint: '', run: function(){ showView('toolbox'); } },
+  { label: '打开共享空间', hint: '', run: function(){ showView('organizations'); } },
+  { label: '打开系统设置', hint: '', run: openSettings },
+  { label: '切换深色 / 浅色主题', hint: '', run: function(){ $('#theme-btn').click(); } }
+];
+var cmdkSel = 0;
+function renderCmdk(q){
+  var list = $('#cmdk-list');
+  list.innerHTML = '';
+  var items = CMDK.filter(function(c){ return !q || c.label.toLowerCase().indexOf(q.toLowerCase()) > -1; });
+  if (!items.length){
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-4);font-size:13px">没有匹配的结果</div>';
+    return;
+  }
+  cmdkSel = 0;
+  items.forEach(function(c, i){
+    var div = document.createElement('div');
+    div.className = 'cmdk-item' + (i === 0 ? ' sel' : '');
+    div.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l-4 6 4 6M15 6l4 6-4 6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="k-label"></span>' + (c.hint ? '<span class="k-hint">' + c.hint + '</span>' : '');
+    $('.k-label', div).textContent = c.label;
+    div.addEventListener('click', function(){ closeCmdk(); c.run(); });
+    list.appendChild(div);
+  });
+}
+function openCmdk(){ renderCmdk(''); $('#cmdk-input').value = ''; $('#cmdk-overlay').classList.add('show'); setTimeout(function(){ $('#cmdk-input').focus(); }, 50); }
+function closeCmdk(){ $('#cmdk-overlay').classList.remove('show'); }
+$('#cmdk-open').addEventListener('click', openCmdk);
+$('#cmdk-overlay').addEventListener('click', function(e){ if (e.target === this) closeCmdk(); });
+$('#cmdk-input').addEventListener('input', function(){ renderCmdk(this.value.trim()); });
+document.addEventListener('keydown', function(e){
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
+    e.preventDefault();
+    $('#cmdk-overlay').classList.contains('show') ? closeCmdk() : openCmdk();
+  }
+  if (e.key === 'Escape'){ closeCmdk(); closeSettings(); }
+  if ($('#cmdk-overlay').classList.contains('show') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){
+    e.preventDefault();
+    var items = $$('.cmdk-item');
+    if (!items.length) return;
+    cmdkSel = (cmdkSel + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+    items.forEach(function(it, i){ it.classList.toggle('sel', i === cmdkSel); });
+  }
+});
+
+/* ================= 登录 / 退出 ================= */
+$('#login-form').addEventListener('submit', function(e){
+  e.preventDefault();
+  $('#view-login').style.display = 'none';
+  $('#app').hidden = false;
+  showView('kb-list');
+  toast('登录成功，欢迎回来，lzy');
+});
+$('#oidc-btn').addEventListener('click', function(){ toast('正在跳转到身份提供商…'); });
+function doLogout(){
+  $('#app').hidden = true;
+  $('#view-login').style.display = '';
+}
+$('#logout-btn').addEventListener('click', doLogout);
+$('#menu-logout').addEventListener('click', doLogout);
+
+/* ================= 初始化 ================= */
+setTheme('light');
+seedThread();
+showView('kb-list');
+</script>
+</body>
+</html>
