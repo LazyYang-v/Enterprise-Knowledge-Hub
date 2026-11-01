@@ -10,6 +10,8 @@ import chatRoutes from './routes/chat.js';
 import agentRoutes from './routes/agents.js';
 import orgRoutes from './routes/orgs.js';
 import miscRoutes from './routes/misc.js';
+import retrieveRoutes from './routes/retrieve.js';
+import { mcpHandler } from './mcp.js';
 
 seed();
 seedDemo();
@@ -20,11 +22,16 @@ app.use(express.json({ limit: '20mb' }));
 app.get('/health', (req, res) => res.json({ ok: true, name: 'Enterprise Knowledge Hub', time: new Date().toISOString() }));
 
 app.use('/api/auth', authRoutes);
+app.use('/api', retrieveRoutes);
+// retrieve 必须先挂载：其余路由的 router.use(authRequired) 会先拦截服务令牌请求。
 app.use('/api', kbRoutes);
 app.use('/api', chatRoutes);
 app.use('/api', agentRoutes);
 app.use('/api', orgRoutes);
 app.use('/api', miscRoutes);
+
+// MCP Streamable HTTP 端点（服务令牌鉴权），供 DeepSeek Harness mcp-client 接入。
+app.post('/mcp', mcpHandler);
 
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
 
