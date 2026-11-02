@@ -90,6 +90,11 @@
         <span class="mi-title hide-collapsed">智能体</span>
         <span class="mi-badge hide-collapsed" id="badge-agents"></span>
       </div>
+      <div class="menu-item" data-nav="tasks" data-view="tasks">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4.5h12a1.5 1.5 0 0 1 1.5 1.5v13L12 15.5 4.5 19V6A1.5 1.5 0 0 1 6 4.5z" stroke-linejoin="round"/><path d="M8 8.5h8M8 12h5" stroke-linecap="round"/></svg></span>
+        <span class="mi-title hide-collapsed">任务</span>
+        <span class="mi-badge hide-collapsed" id="badge-approvals"></span>
+      </div>
       <div class="menu-item" data-nav="toolbox" data-view="toolbox">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg></span>
         <span class="mi-title hide-collapsed">工具箱</span>
@@ -322,6 +327,66 @@
       </div>
     </section>
 
+    <!-- ===== 任务 ===== -->
+    <section class="view" id="view-tasks">
+      <div class="page-header">
+        <div>
+          <h2>任务</h2>
+          <p class="subtitle">Agent 任务编排、工具调用与人类审批。任务由后台 Worker 领取执行，可随时暂停、恢复或取消。</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn" id="task-refresh-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            刷新
+          </button>
+          <button class="btn primary" id="create-task-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+            新建任务
+          </button>
+        </div>
+      </div>
+      <div class="task-toolbar">
+        <div class="scope-tabs" id="task-tabs">
+          <button class="scope-tab active" data-filter="all">全部 <span data-task-count></span></button>
+          <button class="scope-tab" data-filter="running">进行中 <span data-task-count></span></button>
+          <button class="scope-tab" data-filter="waiting_approval">待审批 <span data-task-count></span></button>
+          <button class="scope-tab" data-filter="finished">已结束 <span data-task-count></span></button>
+        </div>
+        <div class="search-box">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+          <input placeholder="搜索任务标题..." id="task-search">
+        </div>
+      </div>
+      <div class="task-scroll" id="task-list"></div>
+    </section>
+
+    <!-- ===== 任务详情 ===== -->
+    <section class="view" id="view-task-detail">
+      <div class="task-detail-head">
+        <button class="back-btn" data-nav="tasks" title="返回任务列表">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="task-detail-title">
+          <div class="row1"><h2 id="task-detail-title">任务</h2><span id="task-detail-status"></span></div>
+          <div class="meta" id="task-detail-meta"></div>
+        </div>
+        <div class="header-actions" id="task-detail-actions"></div>
+      </div>
+      <div class="task-detail-body">
+        <div class="task-main">
+          <div class="task-card" id="task-approval-card"></div>
+          <div class="task-card" id="task-messages-card"></div>
+          <div class="task-card" id="task-events-card"></div>
+        </div>
+        <aside class="task-side">
+          <div class="task-card" id="task-plan-card"></div>
+          <div class="task-card" id="task-tools-card"></div>
+          <div class="task-card" id="task-evidence-card"></div>
+          <div class="task-card" id="task-usage-card"></div>
+        </aside>
+      </div>
+    </section>
+
     <!-- ===== 产物 ===== -->
     <section class="view" id="view-artifacts">
       <div class="page-header">
@@ -383,6 +448,11 @@
       <div class="nav-item" data-pane="memories"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4h9l4 4v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 4v5h5"/></svg>我的记忆</div>
       <div class="nav-group-title">模型</div>
       <div class="nav-item" data-pane="models"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 9h16M9 9v11"/></svg>模型管理</div>
+      <div class="nav-group-title">Agent 平台</div>
+      <div class="nav-item admin-only" data-admin="org" data-pane="tool-registry"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg>工具注册表</div>
+      <div class="nav-item admin-only" data-admin="org" data-pane="mcp"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4" width="8" height="7" rx="1.5"/><rect x="12.5" y="13" width="8" height="7" rx="1.5"/><path d="M11.5 7.5H17a2 2 0 0 1 2 2v3.5M12.5 16.5H7a2 2 0 0 1-2-2V11" stroke-linecap="round"/></svg>MCP 连接</div>
+      <div class="nav-item admin-only" data-admin="platform" data-pane="model-profiles"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3M9 12h6M9 15h4"/></svg>平台模型</div>
+      <div class="nav-item admin-only" data-admin="platform" data-pane="service-principals"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 4v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V7l7-4z"/><path d="M9.5 12l2 2 3.5-4"/></svg>服务主体</div>
       <div class="nav-group-title">空间</div>
       <div class="nav-item" data-pane="members"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 6M17.5 14a5.5 5.5 0 0 1 3 5" stroke-linecap="round"/></svg>成员管理</div>
       <div class="nav-group-title">数据与扩展</div>

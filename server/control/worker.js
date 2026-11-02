@@ -31,17 +31,21 @@ export class TaskWorker {
   constructor({
     workerId = `worker-${crypto.randomUUID()}`,
     model = null,
+    modelResolver = null,
     service = new TaskService(),
     knowledgeFactory = null,
     skillLoader = null,
+    toolFactory = null,
     log = msg => console.log(`[worker ${workerId}] ${msg}`),
     ...options
   } = {}){
     this.workerId = workerId;
     this.model = model;
+    this.modelResolver = modelResolver;
     this.service = service;
     this.knowledgeFactory = knowledgeFactory;
     this.skillLoader = skillLoader;
+    this.toolFactory = toolFactory;
     this.log = log;
     this.options = { ...DEFAULT_WORKER_OPTIONS, ...options };
     this.running = false;
@@ -105,8 +109,8 @@ export class TaskWorker {
     const heartbeat = setInterval(async () => {
       try {
         await renewLease({
-          tenantId: task.tenant_id, taskId: task.id,
-          workerId: this.workerId, leaseTtlMs: this.options.leaseTtlMs,
+          tenantId: task.tenant_id, taskId: task.id, workerId: this.workerId,
+          leaseEpoch: task.lease_epoch, leaseTtlMs: this.options.leaseTtlMs,
         });
         await heartbeatWorker(this.workerId);
       } catch (e){
@@ -118,11 +122,20 @@ export class TaskWorker {
     heartbeat.unref?.();
 
     try {
+      let model = this.model;
+      if (this.modelResolver){
+        try {
+          model = await this.modelResolver(task);
+        } catch (e){
+          throw new TaskExecutionError('model_unavailable', `模型配置解析失败：${e.message}`, { retryable: false });
+        }
+      }
       const result = await executeTask(task, {
-        workerId: this.workerId, model: this.model, signal: abort.signal,
+        workerId: this.workerId, model, signal: abort.signal,
         log: msg => this.log(msg),
         knowledgeFactory: this.knowledgeFactory,
         skillLoader: this.skillLoader,
+        toolFactory: this.toolFactory,
       });
       if (result.status === 'aborted'){
         this.log(`task ${task.id} aborted`);
@@ -146,10 +159,11 @@ export class TaskWorker {
       if (!finished && !leaseLost){
         try {
           const fresh = await getTask(task.tenant_id, task.id);
-          if (fresh && fresh.status === 'running' && fresh.lease_owner === this.workerId){
+          if (fresh && fresh.status === 'running' && fresh.lease_owner === this.workerId
+            && fresh.lease_epoch === task.lease_epoch){
             await releaseTask({
               tenantId: task.tenant_id, taskId: task.id, workerId: this.workerId,
-              expectVersion: fresh.version, reason: 'worker_interrupted',
+              leaseEpoch: fresh.lease_epoch, expectVersion: fresh.version, reason: 'worker_interrupted',
             });
           }
         } catch (e){
@@ -168,14 +182,15 @@ export class TaskWorker {
       this.log(`reload failed: ${e.message}`);
       return;
     }
-    if (!fresh || fresh.status !== 'running' || fresh.lease_owner !== this.workerId) return;
+    if (!fresh || fresh.status !== 'running' || fresh.lease_owner !== this.workerId
+      || fresh.lease_epoch !== task.lease_epoch) return;
 
     const retryable = err.retryable || RETRYABLE_ERRORS.has(err.code);
     if (retryable && fresh.attempt_count < fresh.max_attempts){
       const delay = this._backoff(fresh.attempt_count);
       try {
         await transitionTaskTx({
-          tenantId: fresh.tenant_id, taskId: fresh.id, workerId: this.workerId,
+          tenantId: fresh.tenant_id, taskId: fresh.id, workerId: this.workerId, leaseEpoch: fresh.lease_epoch,
           expectStatus: 'running', expectVersion: fresh.version,
           to: 'retry_wait',
           patch: {
@@ -197,7 +212,7 @@ export class TaskWorker {
     const code = retryable && fresh.attempt_count >= fresh.max_attempts ? 'retry_exhausted' : err.code;
     try {
       await transitionTaskTx({
-        tenantId: fresh.tenant_id, taskId: fresh.id, workerId: this.workerId,
+        tenantId: fresh.tenant_id, taskId: fresh.id, workerId: this.workerId, leaseEpoch: fresh.lease_epoch,
         expectStatus: 'running', expectVersion: fresh.version,
         to: 'failed',
         patch: {

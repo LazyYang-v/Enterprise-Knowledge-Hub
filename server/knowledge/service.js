@@ -133,7 +133,7 @@ export function createKnowledgeService({
       return scope;
     },
 
-    async search({ actor, scope, query, topK = 6, taskId = null, stepId = null, toolCallId = null } = {}){
+    async search({ actor, scope, query, topK = 6, taskId = null, stepId = null, toolCallId = null, leaseEpoch = null } = {}){
       const started = Date.now();
       if (!scope) throw new KnowledgeError('缺少检索范围', { code: 'validation_error', status: 400 });
 
@@ -192,7 +192,7 @@ export function createKnowledgeService({
       if (taskId && evidence && items.length){
         try {
           rows = await evidence.insertEvidenceSnapshots({
-            tenantId: actor.tenantId, taskId, stepId, toolCallId, items,
+            tenantId: actor.tenantId, taskId, stepId, toolCallId, items, leaseEpoch,
           });
         } catch (e){
           throw new KnowledgeUnavailableError('证据快照写入失败');

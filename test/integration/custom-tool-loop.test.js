@@ -53,7 +53,9 @@ async function startFakeModel(){
 
 test('F-01 回归：旧聊天路径经 AgentRunner 完成自定义工具调用', async t => {
   const fake = await startFakeModel();
-  const app = await startApp();
+  const app = await startApp({
+    PLATFORM_ADMIN_EMAILS: 'tool-user@example.com,err-user@example.com',
+  });
   t.after(async () => { await app.close(); await fake.close(); });
 
   const user = await app.register('tool-user@example.com', '工具用户');

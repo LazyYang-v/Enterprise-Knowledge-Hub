@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR } from './db.js';
+import { config } from './config.js';
+import { findByToken, touchServicePrincipal } from './control/service-principal-repo.js';
 
 // 机器对机器访问令牌（DSH MCP / 检索 API 用）。优先取 EKH_SERVICE_TOKEN；
 // 未设置时在 data/service-token 生成并复用一份随机令牌。
@@ -30,4 +32,56 @@ export function isServiceToken(value){
 export function bearerToken(req){
   const h = req.headers.authorization || '';
   return h.startsWith('Bearer ') ? h.slice(7) : '';
+}
+
+function legacyPrincipal(){
+  const configured = [...config.knowledge.serviceKbScope];
+  return {
+    id: 'legacy-service-token',
+    name: 'legacy-service-token',
+    tenantId: null,
+    legacy: true,
+    scopes: {
+      all_kbs: configured.length === 0,
+      kb_ids: configured,
+      tools: ['search_knowledge', 'get_document'],
+    },
+  };
+}
+
+/**
+ * 先按 token_hash 查 PG 服务主体；显式开启兼容时再回退旧 EKH_SERVICE_TOKEN。
+ * 返回 { id, name, tenantId, scopes } 或 null；不返回 token/hash。
+ */
+export async function authenticateServiceToken(token){
+  if (!token) return null;
+  try {
+    const row = await findByToken(token);
+    if (row){
+      await touchServicePrincipal(row.id);
+      const scopes = row.scopes && typeof row.scopes === 'object' ? row.scopes : {};
+      return {
+        id: row.id,
+        name: row.name,
+        tenantId: row.tenant_id,
+        legacy: false,
+        scopes: {
+          all_kbs: !!scopes.all_kbs,
+          kb_ids: Array.isArray(scopes.kb_ids) ? scopes.kb_ids.map(String) : [],
+          tools: Array.isArray(scopes.tools) ? scopes.tools.map(String) : [],
+        },
+      };
+    }
+  } catch (e){
+    // 控制面不可用时保留旧令牌兼容路径，避免旧 MCP/检索完全中断。
+    if (!config.service.legacyTokenEnabled) throw e;
+  }
+  if (config.service.legacyTokenEnabled && isServiceToken(token)) return legacyPrincipal();
+  return null;
+}
+
+export function principalAllowsTool(principal, toolName){
+  const tools = principal?.scopes?.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return false;
+  return tools.includes(toolName);
 }

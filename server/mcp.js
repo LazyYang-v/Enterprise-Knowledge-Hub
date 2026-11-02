@@ -3,15 +3,16 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 import { db } from './db.js';
 import { retrieveScoped } from './search.js';
-import { isServiceToken, bearerToken } from './service-auth.js';
-import { config } from './config.js';
+import { bearerToken, authenticateServiceToken, principalAllowsTool } from './service-auth.js';
 
 const MAX_DOC_CHARS = 50000;
 
-function serviceAllowedKbIds(){
+function serviceAllowedKbIds(principal){
   const all = db.prepare('SELECT id FROM knowledge_bases').all().map(r => r.id);
-  const configured = config.knowledge.serviceKbScope;
-  return configured.length ? configured.filter(id => all.includes(id)) : all;
+  const scopes = principal?.scopes || {};
+  if (scopes.all_kbs) return all;
+  const allowed = [...new Set((scopes.kb_ids || []).map(String))];
+  return allowed.filter(id => all.includes(id));
 }
 
 function refRow(r){
@@ -24,10 +25,10 @@ function refRow(r){
   };
 }
 
-function getServer(){
+function getServer(principal){
   const server = new McpServer({ name: 'enterprise-knowledge-hub', version: '1.0.0' });
 
-  server.registerTool('search_knowledge', {
+  if (principalAllowsTool(principal, 'search_knowledge')) server.registerTool('search_knowledge', {
     title: '知识检索',
     description: '在企业知识库中做混合检索（关键词 + 向量），返回最相关的知识片段及其来源（文档名、知识库名、分数）。',
     inputSchema: {
@@ -38,7 +39,7 @@ function getServer(){
   }, async ({ query, kb_ids, top_k }) => {
     const text = String(query || '').trim();
     if (!text) return { content: [{ type: 'text', text: 'query 不能为空' }], isError: true };
-    let ids = serviceAllowedKbIds();
+    let ids = serviceAllowedKbIds(principal);
     if (kb_ids?.length) {
       const unknown = kb_ids.filter(id => !ids.includes(id));
       if (unknown.length) return { content: [{ type: 'text', text: `服务令牌无权访问或知识库不存在: ${unknown.join(', ')}` }], isError: true };
@@ -51,7 +52,7 @@ function getServer(){
     return { content: [{ type: 'text', text: body }] };
   });
 
-  server.registerTool('get_document', {
+  if (principalAllowsTool(principal, 'get_document')) server.registerTool('get_document', {
     title: '读取知识文档',
     description: '按文档 id 读取企业知识库文档的元数据与全文（由分块拼接，超长截断）。',
     inputSchema: {
@@ -60,8 +61,8 @@ function getServer(){
   }, async ({ document_id }) => {
     const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(String(document_id));
     if (!doc || doc.deleted_at) return { content: [{ type: 'text', text: '文档不存在' }], isError: true };
-    const allowed = serviceAllowedKbIds();
-    if (config.knowledge.serviceKbScope.length && (!doc.kb_id || !allowed.includes(doc.kb_id))){
+    const allowed = serviceAllowedKbIds(principal);
+    if (!doc.kb_id || !allowed.includes(doc.kb_id)){
       return { content: [{ type: 'text', text: '服务令牌无权访问该文档' }], isError: true };
     }
     const version = Number(doc.current_version) || 1;
@@ -80,13 +81,19 @@ function getServer(){
   return server;
 }
 
-// 无状态 Streamable HTTP：每个请求一套 transport，凭服务令牌访问。
-export function mcpHandler(req, res){
-  if (!isServiceToken(bearerToken(req))) {
+// 无状态 Streamable HTTP：每个请求一套 transport，凭服务主体令牌访问。
+export async function mcpHandler(req, res){
+  let principal;
+  try {
+    principal = await authenticateServiceToken(bearerToken(req));
+  } catch {
+    return res.status(503).json({ error: '服务身份校验暂不可用' });
+  }
+  if (!principal) {
     return res.status(401).json({ error: '需要服务令牌（Authorization: Bearer <EKH service token>）' });
   }
   if (req.method !== 'POST') return res.status(405).json({ error: '仅支持 POST' });
-  const server = getServer();
+  const server = getServer(principal);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on('close', () => { transport.close(); server.close(); });
   server.connect(transport).then(() => transport.handleRequest(req, res, req.body)).catch(() => {

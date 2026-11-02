@@ -1,6 +1,7 @@
 // 任务 API + SSE（需要 PostgreSQL）。先设置开关，再动态导入 app 以读取配置。
 process.env.AGENT_PLATFORM_ENABLED = '1';
 
+import '../helpers/sqlite-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 

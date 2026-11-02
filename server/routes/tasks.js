@@ -8,13 +8,15 @@ import {
   TaskService, TaskValidationError, TaskForbiddenError, TaskStateError, TERMINAL_STATUSES,
 } from '../control/task-service.js';
 import {
-  getEventsAfter, getTaskStatus, appendMessage, appendEvent,
+  getEventsAfter, getTaskStatus, appendMessage, appendEvent, listMessages,
 } from '../control/task-repo.js';
 import { getPreset } from '../control/preset-repo.js';
 import { listEvidence, countEvidence } from '../control/evidence-repo.js';
 import { taskKnowledge } from '../knowledge/task-context.js';
 import { selectTaskSkill } from '../skills/index.js';
 import { getPool, withTransaction } from '../control/pg.js';
+import { resolveTools } from '../tools/registry.js';
+import { isAdminUser } from '../auth/admin.js';
 
 const router = Router();
 export const approvalsRouter = Router();
@@ -23,6 +25,7 @@ const service = new TaskService({
   resolveKnowledgeScope: taskKnowledge.resolveTaskKnowledge,
   assertInputDocs: taskKnowledge.assertInputDocs,
   selectSkill: selectTaskSkill,
+  resolveTools,
 });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -74,6 +77,7 @@ function taskInputFromBody(body = {}){
   if (body.kb_scope != null) input.kb_scope = body.kb_scope;
   if (body.skill != null) input.skill = body.skill;
   if (body.approval_mode != null) input.approval_mode = body.approval_mode;
+  if (body.tools != null) input.tools = body.tools;
   if (body.metadata != null) input.metadata = body.metadata;
   return input;
 }
@@ -163,15 +167,24 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
-    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     res.json({ task: snapshot, request_id: requestId(req) });
+  } catch (e){ mapError(res, e, req); }
+});
+
+router.get('/:id/messages', async (req, res) => {
+  try {
+    const tenantId = await resolveTenantId(req.user.id);
+    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
+    res.json({ messages: await listMessages(tenantId, task.id, limit), request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
 
 router.get('/:id/events/history', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
-    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     const after = Number(req.query.after || 0);
     if (!Number.isFinite(after) || after < 0) return fail(res, 400, 'validation_error', 'after 不合法', req);
     const events = await getEventsAfter(tenantId, task.id, after, Number(req.query.limit) || 200);
@@ -242,10 +255,10 @@ router.post('/:id/cancel', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
     await service.cancelTask({
-      tenantId, taskId: req.params.id, userId: req.user.id,
+      tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user),
       reason: String(req.body?.reason || 'user_cancelled').slice(0, 200),
     });
-    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     res.json({ task: snapshot, request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
@@ -254,10 +267,10 @@ router.post('/:id/resume', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
     await service.resumeTask({
-      tenantId, taskId: req.params.id, userId: req.user.id,
+      tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user),
       reason: String(req.body?.reason || 'manual_resume').slice(0, 200),
     });
-    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     res.json({ task: snapshot, request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
@@ -266,10 +279,10 @@ router.post('/:id/input', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
     await service.submitInput({
-      tenantId, taskId: req.params.id, userId: req.user.id,
+      tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user),
       requestId: req.body?.request_id || null, values: req.body?.values || {},
     });
-    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const snapshot = await service.snapshot({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     res.json({ task: snapshot, request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
@@ -277,7 +290,7 @@ router.post('/:id/input', async (req, res) => {
 router.post('/:id/messages', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
-    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     const content = String(req.body?.content || '').trim();
     if (!content) return fail(res, 400, 'validation_error', '消息不能为空', req);
     if (content.length > 8000) return fail(res, 400, 'validation_error', '消息不能超过 8000 字符', req);
@@ -304,7 +317,7 @@ router.get('/:id/artifacts', async (req, res) => {
 router.get('/:id/evidence', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
-    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     const [rows, count] = await Promise.all([
       listEvidence({ tenantId, taskId: task.id, limit: req.query.limit }),
       countEvidence({ tenantId, taskId: task.id }),
@@ -329,7 +342,7 @@ approvalsRouter.get('/:id', async (req, res) => {
     const tenantId = await resolveTenantId(req.user.id);
     const r = await getPool().query('SELECT * FROM agent_approvals WHERE tenant_id = $1 AND id = $2', [tenantId, req.params.id]);
     if (!r.rowCount) return fail(res, 404, 'not_found', '审批不存在', req);
-    await service.getTaskForUser({ tenantId, taskId: r.rows[0].task_id, userId: req.user.id });
+    await service.getTaskForUser({ tenantId, taskId: r.rows[0].task_id, userId: req.user.id, isAdmin: isAdminUser(req.user) });
     res.json({ approval: r.rows[0], request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
@@ -341,6 +354,7 @@ approvalsRouter.post('/:id/decision', async (req, res) => {
     const task = await service.decideApproval({
       tenantId, approvalId: req.params.id, userId: req.user.id,
       decision, argsHash, comment: String(comment).slice(0, 500),
+      isAdmin: isAdminUser(req.user),
     });
     const snapshot = await service.snapshot({ tenantId, taskId: task.id, userId: req.user.id });
     res.json({ task: snapshot, request_id: requestId(req) });

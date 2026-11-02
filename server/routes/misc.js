@@ -8,6 +8,14 @@ import { authRequired } from '../auth.js';
 import { normalizeBaseUrl } from '../llm.js';
 import { parseToolCode } from '../custom-tools.js';
 import { visibleKbs } from '../knowledge/acl.js';
+import { isPlatformAdmin, isAdminUser } from '../auth/admin.js';
+import { auditSafe } from '../control/audit-repo.js';
+import { resolveTenantId } from '../control/tenants.js';
+import {
+  createCustomTool, getCustomTool, listCustomTools, updateCustomTool, deleteCustomTool,
+} from '../tools/custom-tools-repo.js';
+import { descriptorForCustom } from '../tools/registry.js';
+import { upsertToolRegistry, deleteToolRegistryByOwner } from '../control/tool-registry-repo.js';
 
 const router = Router();
 router.use(authRequired);
@@ -67,67 +75,159 @@ const TOOL_META = {
   'browser': { name: '浏览器自动化', description: '让智能体操作真实浏览器完成网页信息获取与表单填写。' },
 };
 
+function publicBuiltinConfig(key, config, admin){
+  if (admin) return config;
+  // 普通用户只能知道是否已配置，不能读取内置工具的 API Key/内部配置。
+  return { configured: Object.keys(config || {}).some(k => !!config[k]) };
+}
+
+function customToolRow(key, t){
+  return {
+    key, name: t.name, description: t.description, enabled: !!t.enabled,
+    config: {}, custom: true, version: `1.${t.current_version || 1}.0`,
+    current_version: t.current_version || 1,
+  };
+}
+
+async function syncCustomRegistry(tool){
+  try {
+    const tenantId = await resolveTenantId(tool.owner_id);
+    const d = descriptorForCustom(tool);
+    await upsertToolRegistry({
+      tenantId, name: d.name, version: d.version, source: 'custom',
+      description: d.description, inputSchema: d.input_schema, sideEffect: d.side_effect,
+      approvalPolicy: d.approval_policy, timeoutMs: d.timeout_ms, idempotency: d.idempotency,
+      resourceScope: d.resource_scope, sandboxProfile: d.sandbox_profile,
+      schemaHash: d.schema_hash, ownerId: tool.owner_id, enabled: !!tool.enabled,
+    });
+  } catch (e){
+    // 控制面不可用不应阻断知识面工具上传；执行时仍会校验当前注册表。
+    console.error('[tools] registry sync failed:', e?.message || e);
+  }
+}
+
+async function auditTool(action, req, tool, decision = 'allowed'){
+  try {
+    const tenantId = await resolveTenantId(tool.owner_id);
+    await auditSafe({
+      tenantId, actorType: 'user', actorId: req.user.id, action,
+      resourceType: 'custom_tool', resourceId: tool.id, decision,
+      detail: { tool_id: tool.id, version: tool.current_version, code_hash: tool.code_hash },
+    });
+  } catch { /* 审计失败不影响主流程 */ }
+}
+
 router.get('/tools', (req, res) => {
+  const admin = isAdminUser(req.user);
   const rows = db.prepare('SELECT * FROM tools').all();
   const have = new Set(rows.map(r => r.key));
   for (const key of Object.keys(TOOL_META)){
     if (!have.has(key)) db.prepare('INSERT INTO tools(key, enabled, config) VALUES(?,0,?)').run(key, '{}');
   }
   const all = db.prepare('SELECT * FROM tools').all();
-  const customs = db.prepare('SELECT id, name, description, enabled FROM custom_tools ORDER BY created_at').all();
+  const customs = listCustomTools({
+    ownerId: req.user.id, includeAll: admin, includeDeleted: false,
+  });
   res.json({ tools: [
-    ...all.map(t => ({ key: t.key, ...TOOL_META[t.key], enabled: !!t.enabled, config: JSON.parse(t.config || '{}') })),
-    ...customs.map(t => ({ key: 'custom:' + t.id, name: t.name, description: t.description, enabled: !!t.enabled, config: {}, custom: true })),
+    ...all.map(t => {
+      const config = JSON.parse(t.config || '{}');
+      return {
+        key: t.key, ...TOOL_META[t.key], enabled: !!t.enabled,
+        config: publicBuiltinConfig(t.key, config, admin),
+      };
+    }),
+    ...customs.map(t => customToolRow('custom:' + t.id, t)),
   ] });
 });
 
-function customToolRow(key, t){
-  return { key, name: t.name, description: t.description, enabled: !!t.enabled, config: {}, custom: true };
-}
-
-router.post('/tools/upload', (req, res) => {
+router.post('/tools/upload', async (req, res) => {
   const { code } = req.body || {};
   if (!code || !String(code).trim()) return err(res, 400, '未提供工具文件内容');
   let meta;
-  try { meta = parseToolCode(code); } catch (e){ return err(res, 400, e.message); }
-  const id = $uuid();
-  const ts = now();
-  db.prepare('INSERT INTO custom_tools(id, owner_id, name, description, parameters, code, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
-    .run(id, req.user.id, meta.name, meta.description, JSON.stringify(meta.parameters), String(code), 1, ts, ts);
-  const fresh = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(id);
-  res.json({ tool: customToolRow('custom:' + id, fresh) });
+  try { meta = await parseToolCode(code); } catch (e){ return err(res, 400, e.message); }
+  const tool = createCustomTool({
+    ownerId: req.user.id, name: meta.name, description: meta.description,
+    parameters: meta.parameters, code: String(code), createdBy: req.user.id,
+  });
+  await syncCustomRegistry(tool);
+  await auditTool('tool.custom.created', req, tool);
+  res.json({ tool: customToolRow('custom:' + tool.id, tool) });
 });
 
-router.delete('/tools/custom/:id', (req, res) => {
-  const t = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(req.params.id);
-  if (!t) return err(res, 404, '工具不存在');
-  db.prepare('DELETE FROM custom_tools WHERE id = ?').run(t.id);
+router.delete('/tools/custom/:id', async (req, res) => {
+  let tool;
+  try {
+    tool = deleteCustomTool(req.params.id, {
+      ownerId: req.user.id,
+      isAdmin: isPlatformAdmin(req.user),
+    });
+  } catch (e){
+    if (e.code === 'tool_forbidden') return err(res, 403, e.message);
+    throw e;
+  }
+  if (!tool) return err(res, 404, '工具不存在');
   // 从引用了该工具的智能体中同步移除
   for (const a of db.prepare('SELECT id, tools FROM agents').all()){
     const arr = JSON.parse(a.tools || '[]');
-    if (arr.includes('custom:' + t.id)){
+    if (arr.includes('custom:' + tool.id)){
       db.prepare('UPDATE agents SET tools = ?, updated_at = ? WHERE id = ?')
-        .run(JSON.stringify(arr.filter(k => k !== 'custom:' + t.id)), now(), a.id);
+        .run(JSON.stringify(arr.filter(k => k !== 'custom:' + tool.id)), now(), a.id);
     }
   }
+  try {
+    const tenantId = await resolveTenantId(tool.owner_id);
+    await deleteToolRegistryByOwner({ tenantId, toolId: tool.id });
+  } catch {}
+  await auditTool('tool.custom.deleted', req, tool);
   res.json({ ok: true });
 });
 
-router.put('/tools/:key', (req, res) => {
+router.put('/tools/:key', async (req, res) => {
   const { key } = req.params;
   if (key.startsWith('custom:')){
-    const t = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(key.slice(7));
-    if (!t) return err(res, 404, '工具不存在');
-    const { enabled } = req.body || {};
-    if (enabled != null) db.prepare('UPDATE custom_tools SET enabled = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, now(), t.id);
-    return res.json({ tool: customToolRow(key, db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(t.id)) });
+    const id = key.slice(7);
+    const existing = getCustomTool(id, { includeDeleted: true });
+    if (!existing) return err(res, 404, '工具不存在');
+    if (!isPlatformAdmin(req.user) && String(existing.owner_id) !== String(req.user.id)){
+      return err(res, 403, '无权修改该工具');
+    }
+    const body = req.body || {};
+    const patch = {};
+    if (body.enabled != null) patch.enabled = !!body.enabled;
+    if (body.code != null){
+      let meta;
+      try { meta = await parseToolCode(body.code); } catch (e){ return err(res, 400, e.message); }
+      patch.code = String(body.code);
+      patch.name = meta.name;
+      patch.description = meta.description;
+      patch.parameters = meta.parameters;
+    }
+    let result;
+    try {
+      result = updateCustomTool(id, patch, {
+        ownerId: req.user.id, isAdmin: isPlatformAdmin(req.user), updatedBy: req.user.id,
+      });
+    } catch (e){
+      if (e.code === 'tool_forbidden') return err(res, 403, e.message);
+      throw e;
+    }
+    if (!result) return err(res, 404, '工具不存在');
+    await syncCustomRegistry(result.tool);
+    await auditTool(result.versionCreated ? 'tool.custom.version_created' : 'tool.custom.updated', req, result.tool);
+    return res.json({ tool: customToolRow(key, result.tool) });
   }
+  if (!isPlatformAdmin(req.user)) return err(res, 403, '需要平台管理员权限');
   const t = db.prepare('SELECT * FROM tools WHERE key = ?').get(key);
   if (!t) return err(res, 404, '工具不存在');
   const { enabled, config } = req.body || {};
   if (enabled != null) db.prepare('UPDATE tools SET enabled = ? WHERE key = ?').run(enabled ? 1 : 0, t.key);
   if (config != null) db.prepare('UPDATE tools SET config = ? WHERE key = ?').run(JSON.stringify(config), t.key);
   const fresh = db.prepare('SELECT * FROM tools WHERE key = ?').get(t.key);
+  await auditSafe({
+    actorType: 'user', actorId: req.user.id, action: 'tool.builtin.updated',
+    resourceType: 'builtin_tool', resourceId: t.key, decision: 'allowed',
+    detail: { enabled: !!fresh.enabled, config_keys: Object.keys(JSON.parse(fresh.config || '{}')) },
+  });
   res.json({ tool: { key: fresh.key, ...TOOL_META[fresh.key], enabled: !!fresh.enabled, config: JSON.parse(fresh.config || '{}') } });
 });
 
@@ -144,6 +244,7 @@ router.get('/models', (req, res) => {
 });
 
 router.post('/models', (req, res) => {
+  if (!isPlatformAdmin(req.user)) return err(res, 403, '需要平台管理员权限');
   const { kind, name, provider = '', base_url, api_key = '', model_name, is_default = 0 } = req.body || {};
   if (!MODEL_KINDS.includes(kind)) return err(res, 400, '模型类型不合法');
   if (!name || !base_url || !model_name) return err(res, 400, '名称、接口地址与模型 ID 不能为空');
@@ -155,6 +256,7 @@ router.post('/models', (req, res) => {
 });
 
 router.put('/models/:id', (req, res) => {
+  if (!isPlatformAdmin(req.user)) return err(res, 403, '需要平台管理员权限');
   const m = db.prepare('SELECT * FROM models WHERE id = ?').get(req.params.id);
   if (!m) return err(res, 404, '模型不存在');
   const { name, provider, base_url, api_key, model_name, is_default } = req.body || {};
@@ -171,11 +273,13 @@ router.put('/models/:id', (req, res) => {
 });
 
 router.delete('/models/:id', (req, res) => {
+  if (!isPlatformAdmin(req.user)) return err(res, 403, '需要平台管理员权限');
   db.prepare('DELETE FROM models WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
 router.post('/models/test', async (req, res) => {
+  if (!isPlatformAdmin(req.user)) return err(res, 403, '需要平台管理员权限');
   const { kind = 'chat', base_url, api_key = '', model_name } = req.body || {};
   if (!base_url || !model_name) return err(res, 400, '接口地址与模型 ID 不能为空');
   const base = normalizeBaseUrl(base_url);

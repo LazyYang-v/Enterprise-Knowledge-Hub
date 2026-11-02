@@ -1,3 +1,4 @@
+import '../helpers/sqlite-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -16,7 +17,6 @@ import {
   insertEvidenceSnapshots, getPinnedVersions,
 } from '../../server/control/evidence-repo.js';
 
-process.env.EKH_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ekh-p03-pg-'));
 const { db } = await import('../../server/db.js');
 const { createTaskKnowledgeResolver } = await import('../../server/knowledge/task-context.js');
 const { getKnowledgeService } = await import('../../server/knowledge/index.js');
@@ -207,8 +207,10 @@ test('P0-3 任务范围、证据快照、引用与 Skill', { skip }, async t => 
       tenantId, ownerId: 'user-a', goal: '引用校验',
       input: { kb_scope: { mode: 'none' } },
     });
+    const claimed = await claimNextTask({ workerId: 'w-citation', leaseTtlMs: 5000 });
+    assert.equal(claimed.id, noScope.id);
     const evidence = await insertEvidenceSnapshots({
-      tenantId, taskId: noScope.id,
+      tenantId, taskId: noScope.id, leaseEpoch: claimed.lease_epoch,
       items: [{
         kb_id: 'kb-a', document_id: 'd-a', document_version: 1, chunk_id: 'c-a1',
         content_hash: hashText('old'), locator_json: { chunk_index: 0 },
@@ -220,8 +222,6 @@ test('P0-3 任务范围、证据快照、引用与 Skill', { skip }, async t => 
     const okModel = await startFakeModel(() => JSON.stringify({
       type: 'finish', summary: '完成', artifact_refs: [], citations: [evidenceId],
     }));
-    const claimed = await claimNextTask({ workerId: 'w-citation', leaseTtlMs: 5000 });
-    assert.equal(claimed.id, noScope.id);
     const result = await executeTask(claimed, { workerId: 'w-citation', model: okModel });
     assert.equal(result.status, 'completed');
     const events = await getEvents(tenantId, noScope.id);

@@ -15,3 +15,12 @@ export async function writeAudit({
       ip, userAgent, JSON.stringify(detail || {})],
   );
 }
+
+/** 审计失败不影响主流程；detail 由调用方限制为 ID/哈希/决策，禁止写入全文与密钥。 */
+export async function auditSafe(args){
+  try {
+    await writeAudit(args);
+  } catch (e){
+    console.error('[audit]', e?.message || e);
+  }
+}

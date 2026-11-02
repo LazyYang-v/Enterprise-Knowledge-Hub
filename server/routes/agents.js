@@ -3,9 +3,34 @@ import { db } from '../db.js';
 import { $uuid, now, err } from '../util.js';
 import { authRequired } from '../auth.js';
 import { intersectVisibleKbIds } from '../knowledge/acl.js';
+import { getCustomTool } from '../tools/custom-tools-repo.js';
 
 const router = Router();
 router.use(authRequired);
+
+const BUILTIN_AGENT_TOOLS = new Set(['web-search', 'mcp', 'browser']);
+
+function bindableTools(res, userId, value){
+  if (value == null) return [];
+  if (!Array.isArray(value)){ err(res, 400, 'tools 必须是数组'); return null; }
+  if (value.length > 20){ err(res, 400, 'tools 最多 20 项'); return null; }
+  const keys = [...new Set(value.map(String).filter(Boolean))];
+  for (const key of keys){
+    if (key.startsWith('custom:')){
+      const tool = getCustomTool(key.slice(7), { ownerId: userId });
+      if (!tool || !tool.enabled){
+        err(res, 403, `无权使用或工具不可用: ${key}`);
+        return null;
+      }
+      continue;
+    }
+    if (!BUILTIN_AGENT_TOOLS.has(key)){
+      err(res, 400, `未知工具: ${key}`);
+      return null;
+    }
+  }
+  return keys;
+}
 
 function bindableKbIds(res, userId, value){
   if (value == null) return [];
@@ -39,10 +64,12 @@ router.post('/agents', (req, res) => {
   if (!name || !String(name).trim()) return err(res, 400, '请填写智能体名称');
   const kbIds = bindableKbIds(res, req.user.id, req.body?.kb_ids ?? []);
   if (!kbIds) return;
+  const toolKeys = bindableTools(res, req.user.id, tools);
+  if (!toolKeys) return;
   const id = $uuid();
   db.prepare('INSERT INTO agents(id, owner_id, name, description, color, system_prompt, model, kb_ids, tools, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, req.user.id, String(name).trim().slice(0, 60), String(description).slice(0, 300), color,
-      String(system_prompt).slice(0, 4000), String(model), JSON.stringify(kbIds), JSON.stringify(tools || []), now(), now());
+      String(system_prompt).slice(0, 4000), String(model), JSON.stringify(kbIds), JSON.stringify(toolKeys), now(), now());
   const a = db.prepare('SELECT * FROM agents WHERE id = ?').get(id);
   res.json({ agent: agentRow(a) });
 });
@@ -61,7 +88,11 @@ router.put('/agents/:id', (req, res) => {
     if (!kbIds) return;
     db.prepare('UPDATE agents SET kb_ids = ? WHERE id = ?').run(JSON.stringify(kbIds), a.id);
   }
-  if (tools != null) db.prepare('UPDATE agents SET tools = ? WHERE id = ?').run(JSON.stringify(tools || []), a.id);
+  if (tools != null){
+    const toolKeys = bindableTools(res, req.user.id, tools);
+    if (!toolKeys) return;
+    db.prepare('UPDATE agents SET tools = ? WHERE id = ?').run(JSON.stringify(toolKeys), a.id);
+  }
   db.prepare('UPDATE agents SET updated_at = ? WHERE id = ?').run(now(), a.id);
   res.json({ agent: agentRow(db.prepare('SELECT * FROM agents WHERE id = ?').get(a.id)) });
 });

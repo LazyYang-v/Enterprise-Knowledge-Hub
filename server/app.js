@@ -14,6 +14,10 @@ import retrieveRoutes from './routes/retrieve.js';
 import taskRoutes, { approvalsRouter } from './routes/tasks.js';
 import knowledgeRoutes from './routes/knowledge.js';
 import skillRoutes from './routes/skills.js';
+import toolRegistryRoutes from './routes/tool-registry.js';
+import mcpConnectionRoutes from './routes/mcp-connections.js';
+import modelProfileRoutes from './routes/model-profiles.js';
+import servicePrincipalRoutes from './routes/service-principals.js';
 import { mcpHandler } from './mcp.js';
 
 export function createApp(){
@@ -29,6 +33,11 @@ export function createApp(){
   app.use('/api', chatRoutes);
   app.use('/api', agentRoutes);
   app.use('/api', orgRoutes);
+  // P0-4 新 API 必须先于旧 /api/tools 工具箱挂载。
+  app.use('/api/tools/registry', toolRegistryRoutes);
+  app.use('/api/mcp/connections', mcpConnectionRoutes);
+  app.use('/api/model-profiles', modelProfileRoutes);
+  app.use('/api/service-principals', servicePrincipalRoutes);
   app.use('/api', miscRoutes);
   // Agent 平台任务 API：默认关闭，通过 AGENT_PLATFORM_ENABLED=1 启用。
   app.use('/api/tasks', taskRoutes);

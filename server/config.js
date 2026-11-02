@@ -34,6 +34,11 @@ function parseList(value){
     .filter(Boolean);
 }
 
+function parseEnum(value, allowed, fallback){
+  const v = String(value || '').trim();
+  return allowed.includes(v) ? v : fallback;
+}
+
 export function parseConfig(env = process.env){
   const nodeEnv = String(env.NODE_ENV || 'development');
   const isProduction = nodeEnv === 'production';
@@ -60,6 +65,26 @@ export function parseConfig(env = process.env){
     skills: Object.freeze({
       dir: String(env.EKH_SKILLS_DIR || ''),
       instructionMaxChars: parsePositiveInt(env.EKH_SKILL_INSTRUCTION_MAX_CHARS, 8000, 100000),
+    }),
+    tools: Object.freeze({
+      sandboxMode: parseEnum(env.EKH_TOOL_SANDBOX_MODE, ['process', 'required', 'off'], 'process'),
+      timeoutMs: parsePositiveInt(env.EKH_TOOL_TIMEOUT_MS, 15000, 120000),
+      maxOutputChars: parsePositiveInt(env.EKH_TOOL_MAX_OUTPUT_CHARS, 8000, 64000),
+      sandboxMemoryMb: parsePositiveInt(env.EKH_TOOL_SANDBOX_MEMORY_MB, 256, 2048),
+      approvalTtlMs: parsePositiveInt(env.EKH_TOOL_APPROVAL_TTL_MS, 24 * 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000),
+      highRiskApprovalTtlMs: parsePositiveInt(env.EKH_TOOL_HIGH_RISK_APPROVAL_TTL_MS, 60 * 60 * 1000, 24 * 60 * 60 * 1000),
+      catalogMaxChars: parsePositiveInt(env.EKH_TOOL_CATALOG_MAX_CHARS, 12000, 64000),
+      maxToolsPerTask: parsePositiveInt(env.EKH_TOOL_MAX_PER_TASK, 20, 50),
+    }),
+    mcp: Object.freeze({
+      clientTimeoutMs: parsePositiveInt(env.EKH_MCP_CLIENT_TIMEOUT_MS, 15000, 120000),
+      stdioEnabled: parseBool(env.EKH_MCP_STDIO_ENABLED, false),
+    }),
+    models: Object.freeze({
+      secretDir: String(env.EKH_MODEL_SECRET_DIR || ''),
+    }),
+    service: Object.freeze({
+      legacyTokenEnabled: parseBool(env.EKH_SERVICE_LEGACY_TOKEN_ENABLED, true),
     }),
   });
 }

@@ -8,17 +8,9 @@ import { config } from '../server/config.js';
 import { closePool } from '../server/control/pg.js';
 import { TaskWorker } from '../server/control/worker.js';
 import { TaskService } from '../server/control/task-service.js';
+import { modelFromEnv, resolveTaskModel } from '../server/control/model-resolver.js';
 
-export function modelFromEnv(env = process.env){
-  const baseUrl = env.EKH_AGENT_MODEL_BASE_URL;
-  const modelName = env.EKH_AGENT_MODEL_NAME;
-  if (!baseUrl || !modelName) return null;
-  return {
-    base_url: baseUrl,
-    model_name: modelName,
-    api_key: env.EKH_AGENT_MODEL_API_KEY || '',
-  };
-}
+export { modelFromEnv };
 
 export function optionsFromEnv(env = process.env){
   const num = (key, fallback) => {
@@ -55,14 +47,18 @@ async function main(){
 
   const worker = new TaskWorker({
     workerId,
-    model: modelFromEnv(),
+    modelResolver: task => resolveTaskModel(task),
     log,
     // 惰性加载：只有带知识范围/Skill 的任务才会触碰 SQLite 与 Skill 仓储。
     knowledgeFactory: async () => (await import('../server/knowledge/index.js')).getKnowledgeService(),
     skillLoader: async ref => (await import('../server/skills/index.js')).loadSkillInstructions(ref),
+    toolFactory: async ({ task, knowledge, signal }) => {
+      const { createToolExecutor } = await import('../server/tools/executor.js');
+      return createToolExecutor({ task, knowledge, signal });
+    },
     ...optionsFromEnv(),
   });
-  if (!worker.model) log('未配置 EKH_AGENT_MODEL_*，领取到任务后会以 model_unavailable 失败');
+  if (!modelFromEnv()) log('未配置 EKH_AGENT_MODEL_* 或 preset model_profile，领取到任务后会以 model_unavailable 失败');
 
   if (args.has('--once')){
     await worker.runOnce();

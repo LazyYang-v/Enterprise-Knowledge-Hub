@@ -34,7 +34,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // dry-run 不创建 tracking 表，也不写业务表。
   const dry = await migrate({ connectionString, dryRun: true, log: () => {} });
-  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
+  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
   assert.deepEqual(dry.applied, []);
   await withClient(async c => {
     const r = await c.query("SELECT to_regclass('public.schema_migrations') AS t");
@@ -43,16 +43,16 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // 首次执行。
   const first = await migrate({ connectionString, log: () => {} });
-  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
+  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
   assert.deepEqual(first.skipped, []);
 
   // 第二次执行幂等。
   const second = await migrate({ connectionString, log: () => {} });
   assert.deepEqual(second.applied, []);
-  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
+  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
 
   const s = await status({ connectionString });
-  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
+  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
   assert.deepEqual(s.pending, []);
 
   await withClient(async c => {
@@ -68,7 +68,8 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
       'uq_agent_approvals_pending', 'uq_agent_presets_active_name',
       'uq_agent_tool_calls_idem', 'uq_agent_inputs_pending', 'idx_agent_tasks_retry_due',
       'uq_agent_evidence_chunk', 'idx_agent_evidence_task_time', 'idx_agent_evidence_doc_version',
-      'idx_skills_tenant_name',
+      'idx_skills_tenant_name', 'idx_agent_tool_calls_task_tool', 'idx_tool_registry_owner',
+      'idx_agent_approvals_consumed', 'idx_service_principals_active', 'idx_agent_evidence_claim',
     ]) assert.ok(indexNames.has(idx), `缺少索引 ${idx}`);
 
     const evidenceCols = await c.query(
@@ -77,6 +78,22 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
     const evidenceNames = new Set(evidenceCols.rows.map(r => r.column_name));
     assert.ok(evidenceNames.has('title'));
     assert.ok(evidenceNames.has('kb_name'));
+    assert.ok(evidenceNames.has('lease_epoch'));
+
+    const cols = async table => {
+      const r = await c.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1",
+        [table],
+      );
+      return new Set(r.rows.map(x => x.column_name));
+    };
+    assert.ok((await cols('tool_registry')).has('owner_id'));
+    assert.ok((await cols('agent_tool_calls')).has('code_hash'));
+    assert.ok((await cols('agent_tool_calls')).has('result_hash'));
+    assert.ok((await cols('agent_approvals')).has('consumed_at'));
+    assert.ok((await cols('agent_approvals')).has('consumed_by'));
+    assert.ok((await cols('service_principals')).has('revoked_at'));
+    assert.ok((await cols('agent_tasks')).has('lease_epoch'));
 
     const triggers = await c.query("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal");
     const triggerNames = new Set(triggers.rows.map(r => r.tgname));

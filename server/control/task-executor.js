@@ -1,13 +1,14 @@
 // 任务执行器：每个 Step 一次模型调用，严格解析为 AgentAction。
-// P0-2 只执行 plan / finish / fail / ask_user；工具调用在 P0-4 ToolRegistry 接入前一律拒绝。
-import crypto from 'node:crypto';
+// 工具调用必须先通过任务快照、schema 与 PolicyEngine，再持久化后执行。
 import { completeModel } from '../agent/model-adapter.js';
 import { parseAgentAction, ActionValidationError } from '../agent/actions.js';
 import { buildAgentSystemPrompt } from '../agent/context-builder.js';
 import {
   getTask,
+  getTaskForUpdate,
   startStep,
   finishStep,
+  completeTask,
   recordPlan,
   appendMessage,
   listMessages,
@@ -16,13 +17,27 @@ import {
   transitionTask,
   createInputRequest,
   createToolCall,
+  startToolAttempt,
+  finishToolAttempt,
   finishToolCall,
+  getToolCall,
+  listToolCalls,
+  getPendingApproval,
+  getApprovedToolApproval,
+  consumeApproval,
+  createApproval,
   appendEvent,
 } from './task-repo.js';
 import { withTransaction } from './pg.js';
 import { DEFAULT_BUDGET, RETRYABLE_ERRORS } from './task-service.js';
 import { config } from '../config.js';
 import { getEvidenceByIds } from './evidence-repo.js';
+import { createToolExecutor } from '../tools/executor.js';
+import { PolicyDeniedError } from '../tools/policy.js';
+import { ToolSchemaError } from '../tools/schema.js';
+import { hashArgs } from '../tools/contract.js';
+import { toolMessageContent } from '../tools/result.js';
+import { scanSecrets } from '../skills/secret-scan.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -64,7 +79,7 @@ function wallMs(task){
 
 async function persistUsage(task, workerId, usage){
   return withTransaction(client => transitionTask(client, {
-    tenantId: task.tenant_id, taskId: task.id, workerId,
+    tenantId: task.tenant_id, taskId: task.id, workerId, leaseEpoch: task.lease_epoch,
     expectStatus: 'running', expectVersion: task.version,
     to: 'running',
     patch: { usage_json: usage },
@@ -79,7 +94,7 @@ async function emit(task, type, payload, actorType = 'worker', actorId = null){
 
 async function failTask(task, workerId, code, message){
   await withTransaction(client => transitionTask(client, {
-    tenantId: task.tenant_id, taskId: task.id, workerId,
+    tenantId: task.tenant_id, taskId: task.id, workerId, leaseEpoch: task.lease_epoch,
     expectStatus: 'running', expectVersion: task.version,
     to: 'failed',
     patch: {
@@ -93,7 +108,7 @@ async function failTask(task, workerId, code, message){
 
 async function cancelByWorker(task, workerId){
   return withTransaction(client => transitionTask(client, {
-    tenantId: task.tenant_id, taskId: task.id, workerId,
+    tenantId: task.tenant_id, taskId: task.id, workerId, leaseEpoch: task.lease_epoch,
     expectStatus: 'running', expectVersion: task.version,
     to: 'cancelled',
     patch: { cancelled_by: 'worker', lease_owner: null, lease_expires_at: null },
@@ -104,7 +119,7 @@ async function cancelByWorker(task, workerId){
 
 async function finalizeCancel(task, workerId){
   return withTransaction(client => transitionTask(client, {
-    tenantId: task.tenant_id, taskId: task.id, workerId,
+    tenantId: task.tenant_id, taskId: task.id, workerId, leaseEpoch: task.lease_epoch,
     expectStatus: 'cancel_requested', expectVersion: task.version,
     to: 'cancelled',
     patch: { cancelled_by: 'worker', lease_owner: null, lease_expires_at: null },
@@ -113,18 +128,40 @@ async function finalizeCancel(task, workerId){
   }));
 }
 
-function buildMessages(goal, plan, history, { skill = '', evidence = [] } = {}){
+function buildMessages(goal, plan, history, { skill = '', evidence = [], toolCatalog = '' } = {}){
   const planLines = plan.map(p => ({ title: p.title, status: p.status }));
   const system = [
     buildAgentSystemPrompt({ goal, plan: planLines, evidence }),
     ACTION_INSTRUCTION,
-  ].join('\n\n');
+    toolCatalog ? `=== ALLOWED TOOLS ===\n${toolCatalog}` : '',
+  ].filter(Boolean).join('\n\n');
   const messages = [{ role: 'system', content: skill ? `${system}\n\n=== SKILL ===\n${skill}` : system }, { role: 'user', content: goal }];
   for (const m of history){
     if (!m.content) continue;
+    if (m.role === 'tool'){
+      messages.push({ role: 'user', content: m.content });
+      continue;
+    }
     messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
   }
   return messages;
+}
+
+function toolCatalogText(executor){
+  if (!executor) return '';
+  const lines = [];
+  for (const tool of executor.snapshots){
+    lines.push([
+      `- ${tool.name}@${tool.version} [${tool.side_effect}/${tool.approval_policy}]`,
+      tool.source === 'custom' || tool.source === 'mcp' ? '（不可信描述）' : '',
+      tool.description ? `：${tool.description}` : '',
+      `\n  input_schema: ${JSON.stringify(tool.input_schema).slice(0, 3000)}`,
+    ].join(''));
+  }
+  const text = lines.join('\n');
+  return text.length > config.tools.catalogMaxChars
+    ? text.slice(0, config.tools.catalogMaxChars) + '\n…(工具目录已截断)'
+    : text;
 }
 
 function locatorText(locator){
@@ -191,14 +228,40 @@ async function createKnowledgeContext(task, knowledgeFactory){
  * 返回 { status }；可重试错误抛出 TaskExecutionError，由 Worker 决定重试/失败。
  */
 export async function executeTask(task, {
-  workerId, model, signal, log = () => {}, knowledgeFactory = null, skillLoader = null,
+  workerId, model, signal, log = () => {}, knowledgeFactory = null, skillLoader = null, toolFactory = null,
 } = {}){
   if (!model) throw new TaskExecutionError('model_unavailable', 'Worker 未配置任务模型', { retryable: false });
+  if (task.lease_epoch == null) throw new TaskExecutionError('lease_lost', '任务缺少领取标识', { retryable: false });
+  // 固定本次领取的 fencing epoch；重载任务后 epoch 变化即表示领取已被回收。
+  const leaseEpoch = task.lease_epoch;
   let current = task;
   const budget = budgetOf(current);
   const evidenceMax = config.knowledge.evidenceMax;
   const skillInstructions = await loadSkillInstructions(current, skillLoader);
   const knowledge = await createKnowledgeContext(current, knowledgeFactory);
+  const hasToolSnapshot = Array.isArray(current.input_json?.tools) && current.input_json.tools.length > 0;
+  let toolExecutor = null;
+
+  async function ensureToolExecutor(){
+    if (!hasToolSnapshot) return null;
+    if (toolExecutor) return toolExecutor;
+    // Worker 未配置工具执行器时，仍可执行不调用工具的旧任务；
+    // 若模型真的发起 call_tool，会在该分支以 tool_unavailable 失败。
+    if (!toolFactory) return null;
+    toolExecutor = await toolFactory({ task: current, knowledge, signal });
+    return toolExecutor;
+  }
+
+  async function appendToolResult(taskObj, name, result){
+    const content = `工具 ${name} ${result.status === 'succeeded' ? '返回' : '失败'}：\n${toolMessageContent(result)}`;
+    const message = await appendMessage({
+      tenantId: taskObj.tenant_id, taskId: taskObj.id, role: 'tool', content,
+      actorId: workerId, leaseEpoch,
+    });
+    await emit(taskObj, 'message.created', {
+      role: 'tool', seq: message.seq, tool_name: name, content_preview: result.content.slice(0, 200),
+    }, 'system');
+  }
   let evidenceForPrompt = [];
   const evidenceIds = new Set();
   let retrievalCount = 0;
@@ -219,6 +282,7 @@ export async function executeTask(task, {
         query,
         topK: evidenceMax,
         taskId: taskObj.id,
+        leaseEpoch,
       });
     } catch (e){
       if (e instanceof TaskExecutionError) throw e;
@@ -265,9 +329,154 @@ export async function executeTask(task, {
     output_tokens: Number(current.usage_json?.output_tokens || 0),
   };
 
+  // 审批恢复：先执行已批准但未消费的调用，再进入模型循环。
+  async function resumeApprovedToolCall(){
+    if (!hasToolSnapshot) return;
+    const approval = await getApprovedToolApproval(current.tenant_id, current.id);
+    if (!approval) return;
+    const executor = await ensureToolExecutor();
+    if (!executor) return;
+    executor.setTask?.(current);
+    let resumed;
+    try {
+      resumed = await withTransaction(async client => {
+        const fresh = await getTaskForUpdate(client, current.tenant_id, current.id);
+        if (!fresh || fresh.status !== 'running' || fresh.lease_owner !== workerId
+          || fresh.lease_epoch !== leaseEpoch) return null;
+        const a = await client.query(
+          `SELECT * FROM agent_approvals WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
+          [current.tenant_id, approval.id],
+        );
+        if (!a.rowCount) return null;
+        const row = a.rows[0];
+        if (row.status !== 'approved' || row.consumed_at || row.kind !== 'tool_call') return null;
+        const c = await client.query(
+          `SELECT * FROM agent_tool_calls WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
+          [current.tenant_id, row.tool_call_id],
+        );
+        if (!c.rowCount) return null;
+        const call = c.rows[0];
+        const expired = row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
+        if (expired){
+          await client.query(
+            `UPDATE agent_approvals SET status = 'expired', decided_at = now()
+              WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND consumed_at IS NULL`,
+            [current.tenant_id, row.id],
+          );
+          await client.query(
+            `UPDATE agent_tool_calls SET status = 'failed', error_code = 'approval_expired', updated_at = now()
+              WHERE tenant_id = $1 AND id = $2 AND status = 'awaiting_approval'`,
+            [current.tenant_id, row.tool_call_id],
+          );
+          await appendEvent(client, {
+            tenantId: current.tenant_id, taskId: current.id, type: 'approval.decided',
+            actorType: 'system', actorId: workerId,
+            payload: { approval_id: row.id, decision: 'expired', tool_call_id: call.id },
+          });
+          return { expired: true, call };
+        }
+        if (call.status !== 'awaiting_approval' || call.args_hash !== row.args_hash){
+          await client.query(
+            `UPDATE agent_tool_calls SET status = 'failed', error_code = 'approval_args_mismatch', updated_at = now()
+              WHERE tenant_id = $1 AND id = $2`,
+            [current.tenant_id, call.id],
+          );
+          return { mismatch: true, call };
+        }
+        const consumed = await consumeApproval(client, {
+          tenantId: current.tenant_id, approvalId: row.id, userId: workerId,
+        });
+        if (!consumed) return null;
+        await client.query(
+          `UPDATE agent_tool_calls SET status = 'running', updated_at = now()
+            WHERE tenant_id = $1 AND id = $2`,
+          [current.tenant_id, call.id],
+        );
+        await appendEvent(client, {
+          tenantId: current.tenant_id, taskId: current.id, type: 'tool.started',
+          actorType: 'worker', actorId: workerId,
+          payload: { tool_call_id: call.id, tool_name: call.tool_name, approval_id: row.id, resumed: true },
+        });
+        return { call, approval: row };
+      });
+    } catch (e){
+      log(`approval resume skipped: ${e.message}`);
+      return;
+    }
+    if (!resumed) return;
+    if (resumed.expired){
+      await emit(current, 'tool.failed', {
+        tool_call_id: resumed.call.id, tool_name: resumed.call.tool_name,
+        error_code: 'approval_expired', retryable: false,
+      }, 'system');
+      await appendToolResult(current, resumed.call.tool_name, {
+        status: 'failed', content: '审批已过期，工具未执行', untrusted: false,
+      });
+      current = await persistUsage(current, workerId, usage).catch(() => current);
+      return;
+    }
+    if (resumed.mismatch){
+      await appendToolResult(current, resumed.call.tool_name, {
+        status: 'failed', content: '审批参数与工具调用不匹配', untrusted: false,
+      });
+      current = await persistUsage(current, workerId, usage).catch(() => current);
+      return;
+    }
+
+    const { call } = resumed;
+    const snapshot = executor.findSnapshot(call.tool_name);
+    let result;
+    let attemptId = null;
+    if (!snapshot){
+      result = { status: 'failed', content: '工具不在任务快照内', untrusted: false, error_code: 'tool_not_found' };
+    } else if (hashArgs(call.args_json || {}) !== call.args_hash){
+      result = { status: 'failed', content: '工具参数哈希不一致', untrusted: false, error_code: 'approval_args_mismatch' };
+    } else {
+      try {
+        const descriptor = await executor.pinned(snapshot);
+        const attempt = await startToolAttempt({
+          tenantId: current.tenant_id, toolCallId: call.id, attemptNo: 1,
+          workerId, leaseEpoch,
+        });
+        attemptId = attempt.id;
+        result = await executor.execute(descriptor, call.args_json || {}, {
+          toolCallId: call.id, stepId: call.step_id,
+        });
+        await finishToolAttempt({
+          tenantId: current.tenant_id, attemptId: attempt.id,
+          status: result.status === 'succeeded' ? 'succeeded' : 'failed',
+          errorCode: result.error_code || null, resultHash: result.result_hash || null,
+          workerId, leaseEpoch,
+        });
+      } catch (e){
+        result = {
+          status: 'failed', content: e.message || String(e), untrusted: false,
+          error_code: e.code || 'tool_execution_failed',
+        };
+      }
+    }
+    await finishToolCall({
+      tenantId: current.tenant_id, toolCallId: call.id, status: result.status,
+      errorCode: result.error_code || null,
+      resultPreview: String(result.content || '').slice(0, 500),
+      resultHash: result.result_hash || null,
+      workerId, leaseEpoch, attemptId,
+    });
+    await emit(current, result.status === 'succeeded' ? 'tool.completed' : 'tool.failed', {
+      tool_call_id: call.id, tool_name: call.tool_name,
+      error_code: result.error_code || null, retryable: false,
+    }, 'system');
+    await appendToolResult(current, call.tool_name, result);
+    usage.tool_calls += 1;
+    current = await persistUsage(current, workerId, usage).catch(() => current);
+  }
+
+  await resumeApprovedToolCall();
+
   while (true){
     current = await getTask(current.tenant_id, current.id);
     if (!current) return { status: 'unknown' };
+    if (current.lease_epoch !== leaseEpoch) return { status: 'lease_lost' };
     if (current.status === 'cancel_requested'){
       await finalizeCancel(current, workerId);
       return { status: 'cancelled' };
@@ -286,7 +495,7 @@ export async function executeTask(task, {
     }
 
     const { task: startedTask, step } = await startStep({
-      tenantId: current.tenant_id, taskId: current.id, workerId,
+      tenantId: current.tenant_id, taskId: current.id, workerId, leaseEpoch,
       expectVersion: current.version, kind: 'model_turn',
     });
     current = startedTask;
@@ -295,9 +504,12 @@ export async function executeTask(task, {
     try {
       const plan = await listPlanItems(current.tenant_id, current.id);
       await retrieveForPrompt(current, plan);
+      const executor = await ensureToolExecutor();
+      executor?.setTask?.(current);
       const history = await listMessages(current.tenant_id, current.id, 20);
       const messages = buildMessages(current.goal, plan, history, {
         skill: skillInstructions, evidence: evidenceForPrompt,
+        toolCatalog: toolCatalogText(executor),
       });
       const timeoutSignal = AbortSignal.timeout(budget.model_timeout_ms);
       const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -306,28 +518,30 @@ export async function executeTask(task, {
       usage.steps += 1;
     } catch (e){
       await finishStep({
-        tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId,
+        tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch,
         status: 'failed', errorCode: e?.code || 'model_error',
       });
       throw classifyError(e);
     }
 
     if (!raw || !String(raw).trim()){
-      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
+      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'model_invalid_output' });
       throw new TaskExecutionError('model_invalid_output', '模型返回空内容', { retryable: true });
     }
 
     const message = await appendMessage({
       tenantId: current.tenant_id, taskId: current.id, role: 'assistant',
-      content: String(raw).slice(0, 20000), actorId: workerId,
+      content: String(raw).slice(0, 20000), actorId: workerId, leaseEpoch,
     });
     await emit(current, 'message.created', { role: 'assistant', seq: message.seq, content_preview: String(raw).slice(0, 200) }, 'model');
 
     let action;
     try {
-      action = parseAgentAction(raw);
+      action = parseAgentAction(raw, {
+        allowedTools: toolExecutor ? new Set(toolExecutor.names()) : null,
+      });
     } catch (e){
-      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
+      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'model_invalid_output' });
       current = await persistUsage(current, workerId, usage).catch(() => current);
       saveCheckpointLater(current, step.seq);
       throw classifyError(e);
@@ -336,14 +550,15 @@ export async function executeTask(task, {
     // 安全点：模型调用结束后再次检查取消。
     current = await getTask(current.tenant_id, current.id);
     if (!current) return { status: 'unknown' };
+    if (current.lease_epoch !== leaseEpoch) return { status: 'lease_lost' };
     if (current.status === 'cancel_requested'){
-      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'cancelled' });
+      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'cancelled' });
       await finalizeCancel(current, workerId);
       return { status: 'cancelled' };
     }
     if (current.status !== 'running') return { status: current.status };
     if (current.cancel_requested_at){
-      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'cancelled' });
+      await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'cancelled' });
       await cancelByWorker(current, workerId);
       return { status: 'cancelled' };
     }
@@ -351,13 +566,13 @@ export async function executeTask(task, {
     switch (action.type){
       case 'plan': {
         current = await recordPlan({
-          tenantId: current.tenant_id, taskId: current.id, workerId,
+          tenantId: current.tenant_id, taskId: current.id, workerId, leaseEpoch,
           expectVersion: current.version, items: action.plan_items,
         });
-        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'completed' });
+        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'completed' });
         current = await persistUsage(current, workerId, usage);
         await saveCheckpoint({
-          tenantId: current.tenant_id, taskId: current.id, stepSeq: Number(step.seq),
+          tenantId: current.tenant_id, taskId: current.id, stepSeq: Number(step.seq), leaseEpoch,
           state: { plan_version: current.plan_version, usage },
         });
         log(`task ${current.id} plan v${current.plan_version}`);
@@ -370,9 +585,9 @@ export async function executeTask(task, {
           question: action.question, inputSchema: action.input_schema,
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         });
-        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'completed' });
+        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'completed' });
         const updated = await withTransaction(client => transitionTask(client, {
-          tenantId: current.tenant_id, taskId: current.id, workerId,
+          tenantId: current.tenant_id, taskId: current.id, workerId, leaseEpoch,
           expectStatus: 'running', expectVersion: current.version,
           to: 'waiting_input',
           patch: { lease_owner: null, lease_expires_at: null, usage_json: usage },
@@ -380,75 +595,200 @@ export async function executeTask(task, {
           actorType: 'worker', actorId: workerId,
         }));
         await saveCheckpoint({
-          tenantId: updated.tenant_id, taskId: updated.id, stepSeq: Number(step.seq),
+          tenantId: updated.tenant_id, taskId: updated.id, stepSeq: Number(step.seq), leaseEpoch,
           state: { waiting: 'input', usage },
         });
         return { status: 'waiting_input' };
       }
       case 'finish': {
+        // ResultVerifier：有未终结工具调用/待审批时不得声明完成。
+        const calls = await listToolCalls({ tenantId: current.tenant_id, taskId: current.id });
+        const open = calls.filter(c => ['proposed', 'running', 'awaiting_approval'].includes(c.status));
+        const pendingApproval = await getPendingApproval(current.tenant_id, current.id);
+        if (open.length || pendingApproval){
+          await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'tool_state_inconsistent' });
+          throw new TaskExecutionError('tool_state_inconsistent', '存在未完成的工具调用或审批，不能结束任务', { retryable: false });
+        }
+        if (scanSecrets(action.summary, 'agent_output').length){
+          await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'secret_detected' });
+          throw new TaskExecutionError('secret_detected', '输出疑似包含密钥，已拒绝写入结果', { retryable: false });
+        }
         const citationIds = [...new Set(action.citations || [])];
         if (citationIds.length){
           const invalid = citationIds.filter(id => !UUID_RE.test(id));
           if (invalid.length){
-            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'model_invalid_output' });
             throw new TaskExecutionError('model_invalid_output', 'citations 含非法的 evidence_id', { retryable: true });
           }
           let rows;
           try {
             rows = await getEvidenceByIds({
-              tenantId: current.tenant_id, taskId: current.id, ids: citationIds,
+              tenantId: current.tenant_id, taskId: current.id, ids: citationIds, leaseEpoch,
             });
           } catch (e){
-            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'knowledge_unavailable' });
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'knowledge_unavailable' });
             throw new TaskExecutionError('knowledge_unavailable', `引用校验失败：${e.message}`, { retryable: true });
           }
           if (rows.length !== citationIds.length){
-            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
-            throw new TaskExecutionError('model_invalid_output', 'citations 引用了不属于本任务的证据', { retryable: true });
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'model_invalid_output' });
+            throw new TaskExecutionError('model_invalid_output', 'citations 引用了不属于当前领取的证据', { retryable: true });
           }
         }
-        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'completed' });
-        await saveCheckpoint({
-          tenantId: current.tenant_id, taskId: current.id, stepSeq: Number(step.seq),
-          state: { finished: true, summary: action.summary, citations: citationIds, usage },
-        });
-        await withTransaction(client => transitionTask(client, {
-          tenantId: current.tenant_id, taskId: current.id, workerId,
-          expectStatus: 'running', expectVersion: current.version,
-          to: 'completed',
-          patch: {
-            result_summary: action.summary, usage_json: usage,
-            lease_owner: null, lease_expires_at: null,
-          },
-          eventType: 'task.completed',
-          eventPayload: {
-            summary: action.summary, artifact_ids: action.artifact_refs,
-            citations: citationIds, evidence_ids: [...evidenceIds],
-          },
-          actorType: 'model',
-        }));
+        try {
+          await completeTask({
+            tenantId: current.tenant_id, taskId: current.id, workerId, leaseEpoch,
+            stepId: step.id, stepSeq: Number(step.seq),
+            summary: action.summary, citations: citationIds,
+            evidenceIds: [...evidenceIds], artifactIds: action.artifact_refs || [],
+            usage,
+            checkpointState: { finished: true, summary: action.summary, citations: citationIds, usage },
+          });
+        } catch (e){
+          if (e.code === 'evidence_conflict'){
+            throw new TaskExecutionError('model_invalid_output', 'citations 引用了不属于当前领取的证据', { retryable: true });
+          }
+          throw e;
+        }
         return { status: 'completed' };
       }
       case 'fail': {
-        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: action.error_code });
+        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: action.error_code });
         await failTask(current, workerId, action.error_code, action.message);
         return { status: 'failed' };
       }
       case 'call_tool': {
-        const argsHash = crypto.createHash('sha256').update(JSON.stringify(action.arguments)).digest('hex');
+        const executor = await ensureToolExecutor();
+        if (!executor){
+          await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'tool_unavailable' });
+          await failTask(current, workerId, 'tool_unavailable', '任务没有工具快照');
+          return { status: 'failed' };
+        }
+        executor.setTask?.(current);
+        let prepared;
+        try {
+          prepared = await executor.prepare(action.tool_name, action.arguments);
+        } catch (e){
+          const snapshot = executor.findSnapshot(action.tool_name);
+          const hash = hashArgs(action.arguments || {});
+          const call = await createToolCall({
+            tenantId: current.tenant_id, taskId: current.id, stepId: step.id,
+            toolName: action.tool_name, toolVersion: snapshot?.version || '',
+            source: snapshot?.source || 'builtin', args: action.arguments || {}, argsHash: hash,
+            sideEffect: snapshot?.side_effect || 'read', status: 'failed',
+            codeHash: snapshot?.code_hash || '',
+          });
+          const errorCode = e.code || (e instanceof ToolSchemaError ? 'tool_schema_mismatch' : 'tool_failed');
+          await finishToolCall({ tenantId: current.tenant_id, toolCallId: call.id, status: 'failed', errorCode, workerId, leaseEpoch });
+          await emit(current, 'policy.denied', {
+            tool_call_id: call.id, tool_name: action.tool_name, reason: errorCode,
+            fatal: !!e.fatal, args_hash: hash,
+          }, 'system');
+          await emit(current, 'tool.failed', {
+            tool_call_id: call.id, tool_name: action.tool_name, error_code: errorCode, retryable: false,
+          }, 'system');
+          await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'completed' });
+          if (e.fatal){
+            await failTask(current, workerId, 'budget_exhausted', `预算已用尽：${e.message}`);
+            return { status: 'failed' };
+          }
+          await appendToolResult(current, action.tool_name, {
+            status: 'failed', content: `工具调用被拒绝：${errorCode}`, untrusted: false, error_code: errorCode,
+          });
+          current = await persistUsage(current, workerId, usage).catch(() => current);
+          continue;
+        }
+
+        const { current: descriptor, decision } = prepared;
+        const hash = hashArgs(action.arguments || {});
+        const approvalNeeded = decision.decision === 'approval';
+        const callStatus = approvalNeeded ? 'awaiting_approval' : 'proposed';
         const call = await createToolCall({
           tenantId: current.tenant_id, taskId: current.id, stepId: step.id,
-          toolName: action.tool_name, args: action.arguments, argsHash,
-          sideEffect: 'read', status: 'failed',
+          toolName: action.tool_name, toolVersion: descriptor.version, source: descriptor.source,
+          args: action.arguments || {}, argsHash: hash, sideEffect: descriptor.side_effect,
+          status: callStatus, codeHash: descriptor.code_hash || '',
         });
-        await finishToolCall({ tenantId: current.tenant_id, toolCallId: call.id, status: 'failed', errorCode: 'tool_unavailable', resultPreview: null });
-        await emit(current, 'tool.failed', { tool_call_id: call.id, tool_name: action.tool_name, error_code: 'tool_unavailable', retryable: false }, 'system');
-        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'tool_unavailable' });
-        await failTask(current, workerId, 'tool_unavailable', `工具尚未接入：${action.tool_name}`);
-        return { status: 'failed' };
+        await emit(current, 'tool.requested', {
+          tool_call_id: call.id, tool_name: action.tool_name,
+          tool_version: descriptor.version, args_hash: hash,
+          side_effect: descriptor.side_effect, decision: decision.decision,
+        }, 'model');
+
+        if (approvalNeeded){
+          const ttl = decision.riskLevel === 'high'
+            ? config.tools.highRiskApprovalTtlMs : config.tools.approvalTtlMs;
+          const approval = await createApproval({
+            tenantId: current.tenant_id, taskId: current.id, toolCallId: call.id,
+            kind: 'tool_call', riskLevel: decision.riskLevel,
+            requestPayload: {
+              tool_name: action.tool_name, tool_version: descriptor.version,
+              side_effect: descriptor.side_effect, approval_mode: decision.approvalMode,
+              args_hash: hash, input_schema: descriptor.input_schema,
+            },
+            argsHash: hash, requestedBy: `agent:${workerId}`,
+            expiresAt: new Date(Date.now() + ttl),
+          });
+          await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'completed' });
+          const updated = await withTransaction(client => transitionTask(client, {
+            tenantId: current.tenant_id, taskId: current.id, workerId, leaseEpoch,
+            expectStatus: 'running', expectVersion: current.version,
+            to: 'waiting_approval',
+            patch: { lease_owner: null, lease_expires_at: null, usage_json: usage },
+            eventType: 'task.waiting_approval',
+            eventPayload: { approval_id: approval.id, tool_call_id: call.id, risk_level: decision.riskLevel },
+            actorType: 'worker', actorId: workerId,
+          }));
+          await saveCheckpoint({
+            tenantId: updated.tenant_id, taskId: updated.id, stepSeq: Number(step.seq), leaseEpoch,
+            state: { waiting: 'approval', approval_id: approval.id, tool_call_id: call.id, usage },
+          });
+          return { status: 'waiting_approval' };
+        }
+
+        const attempt = await startToolAttempt({
+          tenantId: current.tenant_id, toolCallId: call.id, attemptNo: 1,
+          workerId, leaseEpoch,
+        });
+        await emit(current, 'tool.started', {
+          tool_call_id: call.id, tool_name: action.tool_name, tool_version: descriptor.version,
+        }, 'worker', workerId);
+        const result = await executor.execute(descriptor, action.arguments || {}, {
+          toolCallId: call.id, stepId: step.id,
+        });
+        await finishToolAttempt({
+          tenantId: current.tenant_id, attemptId: attempt.id,
+          status: result.status === 'succeeded' ? 'succeeded' : 'failed',
+          errorCode: result.error_code || null, resultHash: result.result_hash || null,
+          workerId, leaseEpoch,
+        });
+        await finishToolCall({
+          tenantId: current.tenant_id, toolCallId: call.id, status: result.status,
+          errorCode: result.error_code || null,
+          resultPreview: result.content.slice(0, 500),
+          resultHash: result.result_hash || null,
+          workerId, leaseEpoch, attemptId: attempt.id,
+        });
+        await emit(current, result.status === 'succeeded' ? 'tool.completed' : 'tool.failed', {
+          tool_call_id: call.id, tool_name: action.tool_name,
+          error_code: result.error_code || null, retryable: false,
+          result_hash: result.result_hash || null, truncated: !!result.truncated,
+        }, 'system');
+        usage.tool_calls += 1;
+        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'completed' });
+        if (result.error_code === 'sandbox_violation'){
+          await failTask(current, workerId, 'sandbox_violation', '自定义工具触发沙箱违规');
+          return { status: 'failed' };
+        }
+        await appendToolResult(current, action.tool_name, result);
+        current = await persistUsage(current, workerId, usage).catch(() => current);
+        await saveCheckpoint({
+          tenantId: current.tenant_id, taskId: current.id, stepSeq: Number(step.seq), leaseEpoch,
+          state: { tool_call_id: call.id, tool_name: action.tool_name, usage },
+        });
+        continue;
       }
       default:
-        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
+        await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'model_invalid_output' });
         throw new TaskExecutionError('model_invalid_output', `未知动作类型：${action.type}`, { retryable: true });
     }
   }
@@ -456,7 +796,7 @@ export async function executeTask(task, {
 
 function saveCheckpointLater(task, stepSeq){
   saveCheckpoint({
-    tenantId: task.tenant_id, taskId: task.id, stepSeq: Number(stepSeq),
+    tenantId: task.tenant_id, taskId: task.id, stepSeq: Number(stepSeq), leaseEpoch: task.lease_epoch,
     state: { error: task.last_error_code || null, step_seq: Number(stepSeq) },
   }).catch(() => {});
 }

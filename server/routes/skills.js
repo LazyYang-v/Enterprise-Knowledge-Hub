@@ -4,6 +4,7 @@ import { authRequired } from '../auth.js';
 import { err } from '../util.js';
 import { config } from '../config.js';
 import { getSkillRegistry } from '../skills/index.js';
+import { isPlatformAdmin } from '../auth/admin.js';
 
 const router = Router();
 
@@ -12,10 +13,6 @@ function requireBearer(req, res, next){
   const h = req.headers.authorization || '';
   if (!h.startsWith('Bearer ')) return err(res, 401, '需要 Bearer 令牌');
   next();
-}
-
-function isPlatformAdmin(user){
-  return !!user?.email && config.platformAdminEmails.includes(String(user.email).toLowerCase());
 }
 
 router.use(requireBearer);

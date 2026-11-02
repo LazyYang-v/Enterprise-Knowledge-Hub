@@ -4,15 +4,21 @@ import { err } from '../util.js';
 import { authRequired } from '../auth.js';
 import { retrieveScoped } from '../search.js';
 import { visibleKbIds, intersectVisibleKbIds } from '../knowledge/acl.js';
-import { isServiceToken, bearerToken } from '../service-auth.js';
+import { bearerToken, authenticateServiceToken } from '../service-auth.js';
 import { config } from '../config.js';
 
 const router = Router();
 
-// 服务令牌或用户 Bearer 令牌均可访问；用户令牌按可见知识库过滤。
-router.use((req, res, next) => {
-  if (isServiceToken(bearerToken(req))) { req.serviceCall = true; return next(); }
-  authRequired(req, res, next);
+// 服务主体或用户 Bearer 令牌均可访问；用户令牌按可见知识库过滤。
+router.use(async (req, res, next) => {
+  try {
+    const principal = await authenticateServiceToken(bearerToken(req));
+    if (principal) { req.servicePrincipal = principal; return next(); }
+    authRequired(req, res, next);
+  } catch (e){
+    console.error('[retrieve] service auth failed:', e?.message || e);
+    return err(res, 503, '服务身份校验暂不可用');
+  }
 });
 
 router.post('/retrieve', async (req, res) => {
@@ -26,16 +32,17 @@ router.post('/retrieve', async (req, res) => {
   if (kbIds !== null && !Array.isArray(kbIds)) return err(res, 400, 'kb_ids 必须是数组');
   kbIds = kbIds ? [...new Set(kbIds.map(String))] : null;
 
-  if (req.serviceCall) {
+  if (req.servicePrincipal) {
     const all = db.prepare('SELECT id FROM knowledge_bases').all().map(r => r.id);
-    // EKH_SERVICE_KB_SCOPE 可把服务令牌限制在指定 KB；未配置时保持旧行为（全部）。
-    const configured = config.knowledge.serviceKbScope;
-    const allowed = configured.length ? configured.filter(id => all.includes(id)) : all;
+    const scopes = req.servicePrincipal.scopes || {};
+    const allowed = scopes.all_kbs
+      ? all
+      : [...new Set((scopes.kb_ids || []).map(String))].filter(id => all.includes(id));
     if (kbIds) {
       const unknown = kbIds.filter(id => !all.includes(id));
       if (unknown.length) return err(res, 404, `知识库不存在: ${unknown.join(', ')}`);
       const denied = kbIds.filter(id => !allowed.includes(id));
-      if (denied.length) return err(res, 403, `服务令牌无权访问知识库: ${denied.join(', ')}`);
+      if (denied.length) return err(res, 403, `服务身份无权访问知识库: ${denied.join(', ')}`);
     } else {
       kbIds = allowed;
     }

@@ -12,6 +12,8 @@ import {
   getPendingInput,
   getLatestCheckpoint,
   listInFlightToolCalls,
+  getPendingApproval,
+  getToolCall,
 } from './task-repo.js';
 import { withTransaction, getPool } from './pg.js';
 import { countEvidence } from './evidence-repo.js';
@@ -135,6 +137,13 @@ function pickInput(raw){
     if (!Array.isArray(raw.input_ids) || raw.input_ids.length > 20) throw new TaskValidationError('input_ids 最多 20 项');
     out.input_ids = raw.input_ids.map(String);
   }
+  if (raw.tools != null){
+    if (!Array.isArray(raw.tools) || raw.tools.length > 20) throw new TaskValidationError('tools 最多 20 项');
+    out.tools = [...new Set(raw.tools.map(t => {
+      if (typeof t !== 'string' || !t.trim() || t.length > 200) throw new TaskValidationError('tools 项必须是不超过 200 字符的字符串');
+      return t.trim();
+    }))];
+  }
   if (raw.metadata != null){
     if (typeof raw.metadata !== 'object' || Array.isArray(raw.metadata)) throw new TaskValidationError('metadata 必须是对象');
     out.metadata = raw.metadata;
@@ -155,12 +164,14 @@ export class TaskService {
   constructor({
     defaultBudget = DEFAULT_BUDGET,
     getPreset = null, resolveKnowledgeScope = null, assertInputDocs = null, selectSkill = null,
+    resolveTools = null,
   } = {}){
     this.defaultBudget = { ...defaultBudget };
     this.getPreset = getPreset;
     this.resolveKnowledgeScope = resolveKnowledgeScope;
     this.assertInputDocs = assertInputDocs;
     this.selectSkill = selectSkill;
+    this.resolveTools = resolveTools;
   }
 
   async createTask({ tenantId, ownerId, goal, title = '', input = {}, budget = {}, priority = 100 }){
@@ -219,6 +230,29 @@ export class TaskService {
         delete safeInput.skill;
       }
     }
+    if (this.resolveTools){
+      try {
+        safeInput.tools = await this.resolveTools({
+          tenantId, ownerId, refs: safeInput.tools ?? null,
+        });
+      } catch (e){
+        if (e.code === 'tool_forbidden') throw new TaskForbiddenError(e.message);
+        if (e.status === 403) throw new TaskForbiddenError(e.message);
+        if (e.status === 422 || String(e.code || '').startsWith('tool_')){
+          throw new TaskValidationError(e.message);
+        }
+        throw e;
+      }
+      extraEvents.push({
+        type: 'tool.snapshot',
+        payload: {
+          tools: safeInput.tools.map(t => ({
+            name: t.name, version: t.version, source: t.source,
+            schema_hash: t.schema_hash, code_hash: t.code_hash || '',
+          })),
+        },
+      });
+    }
 
     return repoCreateTask({
       tenantId, ownerId, title: safeTitle, goal: safeGoal,
@@ -254,14 +288,26 @@ export class TaskService {
 
   async snapshot({ tenantId, taskId, userId, isAdmin = false }){
     const task = await this.getTaskForUser({ tenantId, taskId, userId, isAdmin });
-    const [plan, pendingInput, checkpoint, steps, evidenceCount] = await Promise.all([
+    const approvalPromise = getPendingApproval(tenantId, taskId);
+    const [plan, pendingInput, pendingApproval, pendingToolCall, checkpoint, steps, evidenceCount] = await Promise.all([
       listPlanItems(tenantId, taskId),
       getPendingInput(tenantId, taskId),
+      approvalPromise,
+      approvalPromise.then(a => a ? getToolCall(tenantId, a.tool_call_id) : null),
       getLatestCheckpoint(tenantId, taskId),
       this._recentSteps(tenantId, taskId),
       countEvidence({ tenantId, taskId }),
     ]);
     const lastStep = steps[0] || null;
+    const tools = Array.isArray(task.input_json?.tools)
+      ? task.input_json.tools.map(t => ({
+        name: t.name, version: t.version, source: t.source,
+        description: t.description, side_effect: t.side_effect,
+        approval_policy: t.approval_policy, schema_hash: t.schema_hash,
+      }))
+      : [];
+    const canApprove = !!pendingApproval && (task.owner_id === userId || isAdmin)
+      && pendingApproval.requested_by !== userId;
     return {
       id: task.id,
       title: task.title,
@@ -270,6 +316,7 @@ export class TaskService {
       preset: task.preset_id ? { id: task.preset_id, version: task.preset_version } : null,
       knowledge: task.input_json?.knowledge || null,
       skill: task.input_json?.skill || null,
+      tools,
       evidence_count: evidenceCount,
       plan: plan.map(p => ({
         item_key: p.item_key, title: p.title, description: p.description,
@@ -284,7 +331,18 @@ export class TaskService {
           id: pendingInput.id, question: pendingInput.question,
           input_schema: pendingInput.input_schema, expires_at: isoOrNull(pendingInput.expires_at),
         } : null,
-        approval: null,
+        approval: pendingApproval ? {
+          id: pendingApproval.id,
+          kind: pendingApproval.kind,
+          risk_level: pendingApproval.risk_level,
+          status: pendingApproval.status,
+          args_hash: pendingApproval.args_hash,
+          tool_call_id: pendingApproval.tool_call_id,
+          request: pendingApproval.request_payload_json,
+          arguments: pendingToolCall?.args_json || null,
+          requested_by: pendingApproval.requested_by,
+          expires_at: isoOrNull(pendingApproval.expires_at),
+        } : null,
       },
       artifacts: [],
       usage: {
@@ -304,7 +362,7 @@ export class TaskService {
       permissions: {
         can_cancel: !TERMINAL_STATUSES.has(task.status) && (task.owner_id === userId || isAdmin),
         can_resume: task.status === 'failed' && RETRYABLE_ERRORS.has(task.last_error_code || '') && (task.owner_id === userId || isAdmin),
-        can_approve: false,
+        can_approve: canApprove,
         can_download: false,
       },
       created_at: isoOrNull(task.created_at),
@@ -420,27 +478,46 @@ export class TaskService {
       );
       await appendEvent(client, {
         tenantId, taskId: task.id, type: 'approval.decided', actorType: 'user', actorId: userId,
-        payload: { approval_id: approval.id, decision, decided_by: userId },
+        payload: {
+          approval_id: approval.id, decision, decided_by: userId,
+          tool_call_id: approval.tool_call_id, kind: approval.kind, args_hash: approval.args_hash,
+        },
       });
       if (decision === 'approve'){
-        await client.query(
-          `UPDATE agent_tool_calls SET status = 'proposed', updated_at = now()
-            WHERE tenant_id = $1 AND id = $2 AND status = 'awaiting_approval'`,
-          [tenantId, approval.tool_call_id],
-        );
+        // 对账审批只确认外部结果，不得再次执行工具。
+        if (approval.kind === 'reconciliation'){
+          await client.query(
+            `UPDATE agent_tool_calls
+                SET status = 'reconciled', error_code = NULL, updated_at = now()
+              WHERE tenant_id = $1 AND id = $2 AND status = 'unknown'`,
+            [tenantId, approval.tool_call_id],
+          );
+        }
+        // tool_call 审批保持 awaiting_approval，由 Worker 原子 consume 后执行一次。
         return transitionTask(client, {
           tenantId, taskId: task.id, expectStatus: 'waiting_approval', expectVersion: task.version,
           to: 'queued',
           patch: { ready_at: SQL_NOW, lease_owner: null, lease_expires_at: null },
-          eventType: 'task.queued', eventPayload: { reason: 'approval_approved' },
+          eventType: 'task.queued', eventPayload: { reason: 'approval_approved', approval_id: approval.id },
           actorType: 'user', actorId: userId,
         });
       }
+      await client.query(
+        `UPDATE agent_tool_calls
+            SET status = 'failed', error_code = 'approval_denied', updated_at = now()
+          WHERE tenant_id = $1 AND id = $2 AND status IN ('awaiting_approval', 'proposed')`,
+        [tenantId, approval.tool_call_id],
+      );
+      await client.query(
+        `UPDATE agent_approvals SET status = 'cancelled', decided_at = now(), decided_by = $3
+          WHERE tenant_id = $1 AND task_id = $2 AND status = 'pending'`,
+        [tenantId, task.id, userId],
+      );
       return transitionTask(client, {
         tenantId, taskId: task.id, expectStatus: 'waiting_approval', expectVersion: task.version,
         to: 'cancelled',
         patch: { cancelled_by: userId, lease_owner: null, lease_expires_at: null },
-        eventType: 'task.cancelled', eventPayload: { reason: 'approval_denied', approval_id: approval.id },
+        eventType: 'task.cancelled', eventPayload: { reason: 'approval_denied', approval_id: approval.id, tool_call_id: approval.tool_call_id },
         actorType: 'user', actorId: userId,
       });
     });
@@ -503,21 +580,26 @@ export class TaskService {
       for (const row of sel.rows){
         const task = await getTaskForUpdate(client, row.tenant_id, row.id);
         const inFlight = await listInFlightToolCalls(row.tenant_id, row.id, client);
-        const hasUnknownWrite = inFlight.some(c =>
-          c.status === 'running' && c.side_effect !== 'read' && (c.idempotency || 'none') === 'none');
+        // 读调用可安全重试；有幂等键的写可重试；无幂等键的写结果未知，必须人工对账。
+        const unknownWrite = inFlight.find(c =>
+          c.status === 'running' && c.side_effect !== 'read' && !c.idempotency_key);
+        const hasUnknownWrite = !!unknownWrite;
 
         for (const call of inFlight){
+          const isUnknownWrite = call.status === 'running'
+            && call.side_effect !== 'read' && !call.idempotency_key;
           if (call.attempt_id){
             await client.query(
-              `UPDATE agent_tool_attempts SET status = 'unknown', ended_at = now(), error_code = 'worker_lost'
+              `UPDATE agent_tool_attempts SET status = $3, ended_at = now(), error_code = 'worker_lost'
                 WHERE tenant_id = $1 AND id = $2 AND status = 'running'`,
-              [row.tenant_id, call.attempt_id],
+              [row.tenant_id, call.attempt_id, isUnknownWrite ? 'unknown' : 'failed'],
             );
           }
           await client.query(
-            `UPDATE agent_tool_calls SET status = 'unknown', error_code = 'worker_lost', updated_at = now()
+            `UPDATE agent_tool_calls
+                SET status = $3, error_code = 'worker_lost', updated_at = now()
               WHERE tenant_id = $1 AND id = $2 AND status IN ('running', 'awaiting_approval')`,
-            [row.tenant_id, call.id],
+            [row.tenant_id, call.id, isUnknownWrite ? 'unknown' : 'failed'],
           );
         }
         await client.query(
@@ -529,7 +611,7 @@ export class TaskService {
         const resolution = hasUnknownWrite ? 'reconciliation_required' : 'requeued';
         let approvalId = null;
         if (hasUnknownWrite){
-          const target = inFlight.find(c => c.side_effect !== 'read' && (c.idempotency || 'none') === 'none');
+          const target = unknownWrite;
           if (target){
             const existing = await client.query(
               `SELECT id FROM agent_approvals WHERE tenant_id = $1 AND tool_call_id = $2 AND status = 'pending'`,

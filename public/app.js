@@ -134,6 +134,19 @@ const state = {
   questions: [],
   cmdkItems: [],
   cmdkSel: 0,
+  // Agent 平台（P0-4）
+  platformAvailable: true,
+  tasks: [],
+  taskFilter: 'all',
+  currentTask: null,
+  taskEvents: [],
+  taskMessages: [],
+  taskEvidence: [],
+  taskStream: null,
+  registryTools: [],
+  mcpConnections: [],
+  modelProfiles: [],
+  servicePrincipals: [],
 };
 
 const DEFAULT_MODEL_KIND = { chat: '对话模型', embedding: 'Embedding 模型', rerank: 'Rerank 模型' };
@@ -189,14 +202,16 @@ $('#collapse-btn').addEventListener('click', () => $('#sidebar').classList.add('
 })();
 
 /* ================= 视图切换 ================= */
-const VIEWS = ['kb-list', 'kb-detail', 'chat-new', 'chat-session', 'agents', 'artifacts', 'toolbox', 'organizations'];
+const VIEWS = ['kb-list', 'kb-detail', 'chat-new', 'chat-session', 'agents', 'tasks', 'task-detail', 'artifacts', 'toolbox', 'organizations'];
 let currentView = 'kb-list';
 function showView(name){
   if (VIEWS.indexOf(name) < 0) name = 'kb-list';
+  if (name !== 'task-detail') closeTaskStream();
   currentView = name;
   VIEWS.forEach(v => { const el = $('#view-' + v); if (el) el.classList.toggle('active', v === name); });
   $$('.menu-item[data-view]').forEach(el => el.classList.toggle('active', el.getAttribute('data-view') === name));
   if (name === 'agents') loadAgents();
+  if (name === 'tasks') loadTasks();
   if (name === 'artifacts') loadArtifacts();
   if (name === 'toolbox') loadTools();
   if (name === 'organizations') loadOrgs();
@@ -303,10 +318,27 @@ async function boot(user){
   $('#user-role').textContent = user.role || '';
   $('#user-email').textContent = user.email;
   $('#chat-hero-title').textContent = 'Hi，' + user.name;
+  applyAdminVisibility();
   await Promise.all([loadModels(), loadSessions(), loadKbs(), loadAgentsData()]);
   refreshBadges();
+  loadTaskBadges();
   showView('kb-list');
   loadQuestions();
+}
+function applyAdminVisibility(){
+  $$('.admin-only').forEach(el => {
+    const level = el.getAttribute('data-admin');
+    const ok = level === 'platform' ? !!state.user?.is_platform_admin : !!state.user?.is_admin;
+    el.style.display = ok ? '' : 'none';
+  });
+}
+async function loadTaskBadges(){
+  try {
+    const d = await API.get('/approvals?status=pending');
+    $('#badge-approvals').textContent = d.approvals.length || '';
+  } catch {
+    $('#badge-approvals').textContent = '';
+  }
 }
 async function refreshBadges(){
   $('#badge-kbs').textContent = state.kbs.length || '';
@@ -1650,8 +1682,9 @@ const TOOL_ICONS = {
 async function loadTools(){
   try {
     state.tools = (await API.get('/tools')).tools;
-    renderTools();
   } catch {}
+  await loadTaskRegistry();
+  renderTools();
 }
 function renderTools(){
   const grid = $('#toolbox-grid');
@@ -1701,6 +1734,22 @@ function renderTools(){
     '<div class="tool-desc">上传 JS 文件（<code>export default</code> 一个包含 name、description、parameters、execute(args) 的对象），上传后即可在编辑智能体时勾选，由模型在对话中调用。仅上传可信代码。</div>';
   up.addEventListener('click', () => $('#tool-file-input').click());
   grid.appendChild(up);
+
+  const registry = state.registryTools || [];
+  const counts = registry.reduce((acc, t) => { acc[t.source] = (acc[t.source] || 0) + 1; return acc; }, {});
+  const regCard = document.createElement('div');
+  regCard.className = 'tool-card';
+  regCard.innerHTML = `<div class="tool-head"><span class="tool-icon">${TOOL_ICONS.custom}</span><span class="tool-name">统一工具注册表</span><span class="badge brand">P0-4</span></div>
+    <div class="tool-desc">任务执行只认可注册表与任务快照中的工具；默认拒绝，高风险调用需要一次性审批。当前内置 ${counts.builtin || 0} · 自定义 ${counts.custom || 0} · MCP ${counts.mcp || 0}。</div>
+    <div class="form-hint">${state.user?.is_admin ? '在「系统设置 → 工具注册表」查看版本、副作用与审批策略。' : '工具策略由管理员维护；如需调整请联系管理员。'}</div>`;
+  if (state.user?.is_admin){
+    const btn = document.createElement('button');
+    btn.className = 'btn small';
+    btn.textContent = '管理策略';
+    btn.addEventListener('click', () => openSettings('tool-registry'));
+    regCard.appendChild(btn);
+  }
+  grid.appendChild(regCard);
 }
 async function uploadToolFile(file){
   if (!file) return;
@@ -1717,6 +1766,1107 @@ $('#tool-file-input').addEventListener('change', async e => {
   e.target.value = '';
   await uploadToolFile(f);
 });
+
+/* ================= 任务（Agent 平台） ================= */
+const TASK_STATUS_META = {
+  queued: { label: '排队中', cls: 'warn' },
+  running: { label: '执行中', cls: 'brand' },
+  cancel_requested: { label: '取消中', cls: 'warn' },
+  waiting_approval: { label: '待审批', cls: 'warn' },
+  waiting_input: { label: '等待输入', cls: 'warn' },
+  completed: { label: '已完成', cls: 'brand' },
+  failed: { label: '失败', cls: 'error' },
+  cancelled: { label: '已取消', cls: '' },
+};
+const TASK_FILTERS = {
+  running: ['queued', 'running', 'cancel_requested', 'waiting_input'],
+  waiting_approval: ['waiting_approval'],
+  finished: ['completed', 'failed', 'cancelled'],
+};
+const TASK_EVENT_LABELS = {
+  'task.created': '任务创建',
+  'task.queued': '任务入队',
+  'task.resumed': '任务恢复',
+  'task.cancelled': '任务取消',
+  'task.failed': '任务失败',
+  'task.waiting_approval': '等待审批',
+  'task.waiting_input': '等待输入',
+  'tool.snapshot': '工具快照',
+  'tool.requested': '请求工具',
+  'tool.started': '开始执行工具',
+  'tool.completed': '工具完成',
+  'tool.failed': '工具失败',
+  'policy.denied': '策略拒绝',
+  'policy.scope_reduced': '范围收紧',
+  'approval.decided': '审批结果',
+  'evidence.retrieved': '检索证据',
+  'evidence.version_changed': '证据版本变化',
+  'message.created': '消息',
+  'instruction.received': '收到指令',
+  'input.received': '收到输入',
+};
+
+function taskStatusMeta(status){
+  return TASK_STATUS_META[status] || { label: status || '未知', cls: '' };
+}
+function taskBadge(status){
+  const meta = taskStatusMeta(status);
+  return `<span class="badge ${meta.cls}">${esc(meta.label)}</span>`;
+}
+function shortId(id){
+  const s = String(id || '');
+  return s.length > 8 ? s.slice(0, 8) : s;
+}
+function shortHash(h){
+  const s = String(h || '');
+  return s.length > 16 ? s.slice(0, 16) + '…' : s;
+}
+function fmtMs(ms){
+  const n = Number(ms) || 0;
+  if (n < 1000) return n + ' ms';
+  if (n < 60000) return (n / 1000).toFixed(1) + ' s';
+  return Math.floor(n / 60000) + ' 分 ' + Math.round((n % 60000) / 1000) + ' 秒';
+}
+function taskMatchesFilter(t){
+  if (state.taskFilter === 'all') return true;
+  return (TASK_FILTERS[state.taskFilter] || []).includes(t.status);
+}
+function taskFromList(id){
+  return state.tasks.find(t => t.id === id) || null;
+}
+
+async function loadTasks(){
+  const box = $('#task-list');
+  if (box) box.innerHTML = '<div class="task-loading">加载中…</div>';
+  try {
+    const d = await API.get('/tasks?limit=50');
+    state.platformAvailable = true;
+    state.tasks = d.tasks || [];
+    renderTasks();
+    loadTaskBadges();
+  } catch (e){
+    if (/不存在/.test(e.message)) state.platformAvailable = false;
+    renderTasks(e);
+  }
+}
+function renderTasks(err){
+  const box = $('#task-list');
+  if (!box) return;
+  const q = ($('#task-search')?.value || '').trim().toLowerCase();
+  const matched = state.tasks.filter(t => taskMatchesFilter(t)
+    && (!q || String(t.title || '').toLowerCase().includes(q)
+      || String(t.goal || '').toLowerCase().includes(q)));
+  const counts = { all: state.tasks.length };
+  for (const key of Object.keys(TASK_FILTERS)){
+    counts[key] = state.tasks.filter(t => TASK_FILTERS[key].includes(t.status)).length;
+  }
+  $$('#task-tabs [data-filter]').forEach(btn => {
+    const f = btn.getAttribute('data-filter');
+    btn.classList.toggle('active', f === state.taskFilter);
+    const countEl = $('[data-task-count]', btn);
+    if (countEl) countEl.textContent = counts[f] || 0;
+  });
+
+  if (!state.platformAvailable){
+    box.innerHTML = '<div class="empty-page task-empty"><div class="empty-icon">' + taskEmptyIcon() + '</div>'
+      + '<h3>Agent 平台未启用</h3>'
+      + '<p>任务、工具审批与 Agent 运行需要 PostgreSQL 控制面。设置 <code>AGENT_PLATFORM_ENABLED=1</code> 与 <code>DATABASE_URL</code>，执行 <code>npm run db:migrate</code>，并启动 <code>npm run worker</code> 后刷新。</p>'
+      + '</div>';
+    return;
+  }
+  if (err){
+    box.innerHTML = `<div class="empty-page task-empty"><div class="empty-icon">${taskEmptyIcon()}</div><h3>任务读取失败</h3><p>${esc(err.message)}</p><button class="btn" id="task-retry">重试</button></div>`;
+    $('#task-retry')?.addEventListener('click', loadTasks);
+    return;
+  }
+  if (!matched.length){
+    box.innerHTML = '<div class="empty-page task-empty"><div class="empty-icon">' + taskEmptyIcon() + '</div>'
+      + `<h3>${state.tasks.length ? '没有符合条件的任务' : '还没有任务'}</h3>`
+      + '<p>新建任务后，后台 Worker 会领取执行；遇到高风险工具调用会暂停并等待你审批。</p>'
+      + '<button class="btn primary" id="task-empty-create">新建任务</button></div>';
+    $('#task-empty-create')?.addEventListener('click', openCreateTask);
+    return;
+  }
+  box.innerHTML = '<div class="task-list">' + matched.map(t => {
+    const meta = taskStatusMeta(t.status);
+    const usage = t.usage || {};
+    return `<div class="task-row task-status-${esc(t.status)}" data-task-id="${esc(t.id)}">
+      <span class="task-status-dot ${esc(meta.cls)}"></span>
+      <div class="task-row-main">
+        <div class="task-row-title">${esc(t.title || t.goal || '未命名任务')}</div>
+        <div class="task-row-meta">
+          <span class="mono">${esc(shortId(t.id))}</span>
+          <span>${esc(meta.label)}</span>
+          <span>工具 ${Number(usage.tool_calls) || 0}</span>
+          <span>步骤 ${Number(usage.steps) || 0}</span>
+          <span>${esc(relTime(new Date(t.updated_at || t.created_at).getTime()))}</span>
+        </div>
+      </div>
+      ${t.status === 'waiting_approval' ? '<span class="badge warn">需要审批</span>' : ''}
+      <span class="badge ${meta.cls}">${esc(meta.label)}</span>
+      <svg class="task-arrow ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>`;
+  }).join('') + '</div>';
+  $$('.task-row', box).forEach(row => row.addEventListener('click', () => openTask(row.getAttribute('data-task-id'))));
+  if ($('#task-search')) $('#task-search').value = q;
+}
+function taskEmptyIcon(){
+  return '<svg class="ic" style="width:28px;height:28px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4.5h12a1.5 1.5 0 0 1 1.5 1.5v13L12 15.5 4.5 19V6A1.5 1.5 0 0 1 6 4.5z" stroke-linejoin="round"/><path d="M8 8.5h8M8 12h5" stroke-linecap="round"/></svg>';
+}
+
+$('#task-refresh-btn').addEventListener('click', () => loadTasks());
+$('#create-task-btn').addEventListener('click', () => openCreateTask());
+$('#task-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('[data-filter]');
+  if (!btn) return;
+  state.taskFilter = btn.getAttribute('data-filter');
+  renderTasks();
+});
+$('#task-search').addEventListener('input', () => renderTasks());
+
+async function loadTaskRegistry(){
+  try {
+    state.registryTools = (await API.get('/tools/registry')).tools || [];
+  } catch { state.registryTools = []; }
+  return state.registryTools;
+}
+
+async function openCreateTask(){
+  const tools = await loadTaskRegistry();
+  const defaults = new Set(['knowledge.search', 'knowledge.get_document', 'knowledge.get_citation', 'knowledge.list_bases']);
+  const dlg = openDialog(`
+    <h3>新建任务</h3>
+    <p class="dlg-sub">任务会进入队列，由 Worker 领取执行；工具调用经过策略判定，高风险操作自动暂停等待审批。</p>
+    <div class="dlg-body">
+      <label class="form-label">目标</label>
+      <textarea class="form-textarea" id="ct-goal" rows="4" placeholder="例如：梳理知识库中的合同条款，列出付款义务与违约风险"></textarea>
+      <label class="form-label">标题（可选）</label>
+      <input class="form-input" id="ct-title" placeholder="自动使用目标摘要">
+      <label class="form-label">审批模式</label>
+      <select class="form-select" id="ct-approval">
+        <option value="">按策略决定（推荐）</option>
+        <option value="always">始终审批</option>
+        <option value="never">从不审批（不降级高风险）</option>
+      </select>
+      <label class="form-label">知识范围</label>
+      <select class="form-select" id="ct-kb-mode">
+        <option value="visible">全部可见知识库</option>
+        <option value="explicit">指定知识库</option>
+        <option value="none">不使用知识库</option>
+      </select>
+      <div class="form-checks hide" id="ct-kb-list" style="margin-top:8px">
+        ${(state.kbs || []).map(kb => `<label class="form-check"><input type="checkbox" value="${esc(kb.id)}">${esc(kb.name)}</label>`).join('') || '<span class="form-hint">暂无知识库</span>'}
+      </div>
+      <label class="form-label">可用工具</label>
+      <p class="form-hint" style="margin-top:0;margin-bottom:6px">不勾选时使用默认的 4 个只读知识工具。自定义工具与 MCP 工具需先在后台注册。</p>
+      <div class="task-tool-picker" id="ct-tools">
+        ${tools.length ? tools.map(t => `<label class="form-check task-tool-option">
+          <input type="checkbox" value="${esc(t.name)}" ${defaults.has(t.name) ? 'checked' : ''}>
+          <span class="mono">${esc(t.name)}</span>
+          <span class="badge">${esc(t.source || 'builtin')}</span>
+          <span class="badge ${t.side_effect === 'read' ? '' : 'warn'}">${esc(t.side_effect || 'read')}</span>
+        </label>`).join('') : '<span class="form-hint">工具注册表不可用，将使用默认知识工具。</span>'}
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn dlg-close">取消</button>
+      <button class="btn primary" id="ct-create">创建任务</button>
+    </div>`, { lg: true });
+  $('#ct-goal', dlg).focus();
+  $('#ct-kb-mode', dlg).addEventListener('change', e => {
+    $('#ct-kb-list', dlg).classList.toggle('hide', e.target.value !== 'explicit');
+  });
+  $('#ct-create', dlg).addEventListener('click', async () => {
+    const goal = $('#ct-goal', dlg).value.trim();
+    if (!goal) return toast('请填写任务目标', false);
+    const body = { goal, title: $('#ct-title', dlg).value.trim() };
+    const approval = $('#ct-approval', dlg).value;
+    if (approval) body.approval_mode = approval;
+    const kbMode = $('#ct-kb-mode', dlg).value;
+    const kbIds = $$('#ct-kb-list input:checked', dlg).map(i => i.value);
+    if (kbMode === 'explicit' && !kbIds.length) return toast('请选择至少一个知识库', false);
+    body.kb_scope = {
+      mode: kbMode,
+      ...(kbMode === 'explicit' ? { kb_ids: kbIds } : {}),
+      version_policy: 'pin_on_first_use',
+    };
+    const selected = $$('#ct-tools input:checked', dlg).map(i => i.value);
+    if (selected.length) body.tools = selected;
+    try {
+      const r = await API.post('/tasks', body);
+      closeDialog();
+      toast('任务已创建');
+      await loadTasks();
+      openTask(r.task.id);
+    } catch (e){ toast(e.message, false); }
+  });
+}
+
+async function openTask(id){
+  state.currentTask = { id };
+  state.taskEvents = [];
+  state.taskMessages = [];
+  state.taskEvidence = [];
+  showView('task-detail');
+  $('#task-detail-title').textContent = '加载中…';
+  $('#task-detail-status').innerHTML = '';
+  $('#task-detail-meta').textContent = '';
+  $('#task-detail-actions').innerHTML = '';
+  ['task-approval-card', 'task-messages-card', 'task-events-card', 'task-plan-card', 'task-tools-card', 'task-evidence-card', 'task-usage-card']
+    .forEach(el => { $('#' + el).innerHTML = '<div class="task-loading">加载中…</div>'; });
+  await refreshTaskDetail(true);
+  if (state.currentTask?.id === id) connectTaskStream(id);
+}
+
+async function refreshTaskDetail(full = false){
+  const id = state.currentTask?.id;
+  if (!id) return;
+  try {
+    const d = await API.get('/tasks/' + id);
+    if (state.currentTask?.id !== id) return;
+    state.currentTask = d.task;
+    if (full){
+      await Promise.all([loadTaskMessages(id), loadTaskEvents(id), loadTaskEvidence(id)]);
+    }
+    renderTaskDetail();
+  } catch (e){
+    if (state.currentTask?.id !== id) return;
+    const meta = taskStatusMeta(state.currentTask.status);
+    $('#task-detail-title').textContent = state.currentTask.title || '任务';
+    $('#task-detail-status').innerHTML = taskBadge(state.currentTask.status || meta.label);
+    $('#task-detail-meta').textContent = e.message;
+    $('#task-detail-actions').innerHTML = '<button class="btn" data-nav="tasks">返回任务列表</button>';
+  }
+}
+
+async function loadTaskMessages(id){
+  try {
+    const d = await API.get(`/tasks/${id}/messages?limit=200`);
+    if (state.currentTask?.id === id) state.taskMessages = d.messages || [];
+  } catch {
+    if (state.currentTask?.id === id) state.taskMessages = [];
+  }
+}
+async function loadTaskEvents(id){
+  try {
+    let after = 0;
+    const all = [];
+    for (let i = 0; i < 10; i++){
+      const d = await API.get(`/tasks/${id}/events/history?after=${after}&limit=200`);
+      all.push(...(d.events || []));
+      if (!d.events?.length || d.last_seq >= d.latest_seq) break;
+      after = d.last_seq;
+    }
+    if (state.currentTask?.id === id) state.taskEvents = all.sort((a, b) => a.seq - b.seq);
+  } catch {
+    if (state.currentTask?.id === id) state.taskEvents = [];
+  }
+}
+async function loadTaskEvidence(id){
+  try {
+    const d = await API.get(`/tasks/${id}/evidence?limit=100`);
+    if (state.currentTask?.id === id) state.taskEvidence = d.evidence || [];
+  } catch {
+    if (state.currentTask?.id === id) state.taskEvidence = [];
+  }
+}
+
+function renderTaskDetail(){
+  const task = state.currentTask;
+  if (!task || !task.id) return;
+  $('#task-detail-title').textContent = task.title || task.goal || '未命名任务';
+  $('#task-detail-status').innerHTML = taskBadge(task.status);
+  const bits = [
+    '#' + shortId(task.id),
+    '创建于 ' + fmtTime(task.created_at),
+    '更新于 ' + fmtTime(task.updated_at),
+    task.recovery_count ? `崩溃恢复 ${task.recovery_count} 次` : '',
+    task.resume_count ? `手动恢复 ${task.resume_count} 次` : '',
+    task.last_error ? `错误 ${task.last_error.code}` : '',
+  ].filter(Boolean);
+  $('#task-detail-meta').textContent = bits.join(' · ');
+  const actions = [];
+  if (task.permissions?.can_cancel) actions.push('<button class="btn" id="task-cancel-btn">取消任务</button>');
+  if (task.permissions?.can_resume) actions.push('<button class="btn primary" id="task-resume-btn">恢复任务</button>');
+  actions.push('<button class="btn small" id="task-detail-refresh">刷新</button>');
+  $('#task-detail-actions').innerHTML = actions.join('');
+  $('#task-cancel-btn')?.addEventListener('click', () => taskAction('cancel'));
+  $('#task-resume-btn')?.addEventListener('click', () => taskAction('resume'));
+  $('#task-detail-refresh')?.addEventListener('click', () => refreshTaskDetail(true));
+
+  renderTaskPending(task);
+  renderTaskMessages(task);
+  renderTaskEvents();
+  renderTaskPlan(task);
+  renderTaskTools(task);
+  renderTaskEvidence(task);
+  renderTaskUsage(task);
+}
+
+function renderTaskPending(task){
+  const card = $('#task-approval-card');
+  const approval = task.pending?.approval;
+  const input = task.pending?.input;
+  if (!approval && !input){
+    card.innerHTML = '<div class="task-card-head"><span class="task-card-title">待处理</span></div><p class="task-muted">暂无待处理的审批或输入请求。</p>';
+    return;
+  }
+  if (approval){
+    const req = approval.request || {};
+    const risk = approval.risk_level || 'medium';
+    card.innerHTML = `<div class="task-card-head"><span class="task-card-title">需要审批</span><span class="badge warn">${esc(risk)} risk</span></div>
+      <div class="task-approval-box">
+        <div class="task-approval-tool"><span class="mono">${esc(req.tool_name || '未知工具')}</span><span class="badge">${esc(req.side_effect || '')}</span></div>
+        <div class="task-kv"><span>调用参数</span></div>
+        <pre class="task-args">${esc(JSON.stringify(approval['arguments'] ?? {}, null, 2))}</pre>
+        <div class="task-kv"><span>审批模式</span><b>${esc(req.approval_mode || '—')}</b></div>
+        <div class="task-kv"><span>参数哈希</span><code class="task-hash">${esc(approval.args_hash || req.args_hash || '')}</code></div>
+        <div class="task-kv"><span>过期时间</span><b>${esc(fmtTime(approval.expires_at))}</b></div>
+        <p class="form-hint">审批只对当前工具调用与参数哈希生效；参数变化后旧审批自动失效。</p>
+        <div class="task-approval-actions">
+          ${task.permissions?.can_approve
+            ? '<button class="btn" id="task-deny-btn">拒绝</button><button class="btn primary" id="task-approve-btn">批准并执行</button>'
+            : '<span class="form-hint">当前用户无权审批此请求（不能审批自己发起的请求）。</span>'}
+        </div>
+      </div>`;
+    $('#task-approve-btn')?.addEventListener('click', () => decideTaskApproval(approval.id, 'approve'));
+    $('#task-deny-btn')?.addEventListener('click', () => decideTaskApproval(approval.id, 'deny'));
+  }
+  if (input){
+    const schema = input.input_schema || {};
+    const props = schema.properties || {};
+    const required = new Set(schema.required || []);
+    const fields = Object.entries(props).map(([key, def]) => {
+      const req = required.has(key) ? ' <span class="task-required">*</span>' : '';
+      if (def.type === 'boolean'){
+        return `<label class="form-check" style="margin-top:10px"><input type="checkbox" data-input-key="${esc(key)}" data-input-type="boolean"> ${esc(def.title || key)}${req}</label>`;
+      }
+      if (def.enum){
+        return `<label class="form-label">${esc(def.title || key)}${req}</label><select class="form-select" data-input-key="${esc(key)}" data-input-type="string">${def.enum.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('')}</select>`;
+      }
+      const type = ['number', 'integer', 'array'].includes(def.type) ? def.type : 'string';
+      return `<label class="form-label">${esc(def.title || key)}${req}</label><input class="form-input" data-input-key="${esc(key)}" data-input-type="${type}" placeholder="${esc(def.description || (type === 'array' ? '多个值用逗号分隔' : ''))}">`;
+    }).join('');
+    card.innerHTML = `<div class="task-card-head"><span class="task-card-title">等待输入</span><span class="badge warn">Agent 提问</span></div>
+      <p class="task-question">${esc(input.question || 'Agent 需要补充信息')}</p>
+      ${fields || '<p class="task-muted">该请求没有声明输入字段。</p>'}
+      <div class="task-approval-actions"><button class="btn primary" id="task-input-submit">提交输入</button></div>`;
+    $('#task-input-submit')?.addEventListener('click', () => submitTaskInput(input.id, schema));
+  }
+}
+
+async function decideTaskApproval(approvalId, decision){
+  const approval = state.currentTask?.pending?.approval;
+  if (!approval) return;
+  const verb = decision === 'approve' ? '批准' : '拒绝';
+  if (!confirm(`确认${verb}这次工具调用？`)) return;
+  try {
+    await API.post(`/approvals/${approvalId}/decision`, {
+      decision, args_hash: approval.args_hash,
+    });
+    toast(decision === 'approve' ? '已批准，任务将重新入队执行' : '已拒绝，任务将取消');
+    await refreshTaskDetail(true);
+    loadTaskBadges();
+    loadTasks();
+  } catch (e){ toast(e.message, false); }
+}
+async function submitTaskInput(requestId, schema){
+  const values = {};
+  try {
+    $$('#task-approval-card [data-input-key]').forEach(el => {
+      const key = el.getAttribute('data-input-key');
+      const type = el.getAttribute('data-input-type');
+      if (type === 'boolean') values[key] = !!el.checked;
+      else if (type === 'number' || type === 'integer'){
+        if (el.value === '') return;
+        const n = Number(el.value);
+        if (!Number.isFinite(n)) throw new Error(`${key} 必须是数字`);
+        values[key] = type === 'integer' ? Math.trunc(n) : n;
+      } else if (type === 'array'){
+        values[key] = el.value.split(/[,，\n]/).map(v => v.trim()).filter(Boolean);
+      } else values[key] = el.value;
+    });
+  } catch (e){ return toast(e.message, false); }
+  try {
+    await API.post(`/tasks/${state.currentTask.id}/input`, { request_id: requestId, values });
+    toast('输入已提交，任务将重新入队');
+    await refreshTaskDetail(true);
+    loadTaskBadges();
+  } catch (e){ toast(e.message, false); }
+}
+async function taskAction(action){
+  const task = state.currentTask;
+  if (!task) return;
+  const label = action === 'cancel' ? '取消' : '恢复';
+  if (!confirm(`确认${label}任务「${task.title || shortId(task.id)}」？`)) return;
+  try {
+    await API.post(`/tasks/${task.id}/${action}`, {});
+    toast(`任务已${label}`);
+    await refreshTaskDetail(true);
+    loadTasks();
+  } catch (e){ toast(e.message, false); }
+}
+
+function renderTaskMessages(task){
+  const card = $('#task-messages-card');
+  const msgs = state.taskMessages;
+  const roleLabel = { user: '用户', assistant: 'Agent', tool: '工具', system: '系统' };
+  const list = msgs.length
+    ? msgs.map(m => `<div class="task-msg task-msg-${esc(m.role)}">
+        <div class="task-msg-head"><span>${esc(roleLabel[m.role] || m.role)}</span><span class="mono">#${esc(String(m.seq ?? ''))}</span></div>
+        <div class="task-msg-body">${esc(m.content || '')}</div>
+      </div>`).join('')
+    : '<p class="task-muted">暂无消息。Worker 执行后会在这里显示模型输出与工具结果。</p>';
+  const terminal = ['completed', 'failed', 'cancelled'].includes(task.status);
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">对话与工具结果</span><span class="badge">${msgs.length}</span></div>
+    <div class="task-msg-list">${list}</div>
+    <div class="task-instruction">
+      <input class="form-input" id="task-instruction-input" placeholder="给 Agent 发送补充指令…" ${terminal ? 'disabled' : ''}>
+      <button class="btn primary" id="task-instruction-send" ${terminal ? 'disabled' : ''}>发送</button>
+    </div>`;
+  const send = async () => {
+    const text = $('#task-instruction-input').value.trim();
+    if (!text) return;
+    try {
+      await API.post(`/tasks/${task.id}/messages`, { content: text });
+      $('#task-instruction-input').value = '';
+      toast('指令已发送');
+      await loadTaskMessages(task.id);
+      renderTaskMessages(task);
+    } catch (e){ toast(e.message, false); }
+  };
+  $('#task-instruction-send')?.addEventListener('click', send);
+  $('#task-instruction-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+}
+
+function renderTaskEvents(){
+  const card = $('#task-events-card');
+  const events = state.taskEvents;
+  if (!events.length){
+    card.innerHTML = '<div class="task-card-head"><span class="task-card-title">事件时间线</span></div><p class="task-muted">暂无事件。</p>';
+    return;
+  }
+  const rows = [...events].reverse().map(ev => {
+    const label = TASK_EVENT_LABELS[ev.type] || ev.type;
+    const p = ev.payload || {};
+    const detail = p.tool_name || p.decision || p.error_code || p.question || p.content_preview || p.approval_id || '';
+    const cls = ev.type.startsWith('tool.') ? 'tool' : ev.type.startsWith('approval.') ? 'approval'
+      : ev.type === 'policy.denied' ? 'denied' : ev.type.startsWith('task.') ? 'task' : '';
+    return `<div class="task-event ${cls}">
+      <span class="task-event-seq mono">#${esc(String(ev.seq))}</span>
+      <span class="task-event-dot"></span>
+      <div class="task-event-main"><div class="task-event-title">${esc(label)}${p.actor_type ? '' : ''}</div>
+        <div class="task-event-detail">${detail ? esc(String(detail).slice(0, 200)) : ''}${p.args_hash ? ' · ' + esc(shortHash(p.args_hash)) : ''}</div>
+      </div>
+      <span class="task-event-time">${esc(fmtTime(ev.ts))}</span>
+    </div>`;
+  }).join('');
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">事件时间线</span><span class="badge">${events.length}</span></div><div class="task-event-list">${rows}</div>`;
+}
+
+function renderTaskPlan(task){
+  const card = $('#task-plan-card');
+  const plan = task.plan || [];
+  if (!plan.length){
+    card.innerHTML = '<div class="task-card-head"><span class="task-card-title">执行计划</span></div><p class="task-muted">模型尚未生成计划。</p>';
+    return;
+  }
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">执行计划</span><span class="badge">${plan.length}</span></div>
+    <div class="task-plan-list">${plan.map(p => `<div class="task-plan-item">
+      <span class="task-plan-dot ${esc(p.status || '')}"></span>
+      <div><div class="task-plan-title">${esc(p.title)}</div>${p.description ? `<div class="task-plan-desc">${esc(p.description)}</div>` : ''}</div>
+      <span class="badge">${esc(p.status || '')}</span>
+    </div>`).join('')}</div>`;
+}
+function renderTaskTools(task){
+  const card = $('#task-tools-card');
+  const tools = task.tools || [];
+  if (!tools.length){
+    card.innerHTML = '<div class="task-card-head"><span class="task-card-title">工具快照</span></div><p class="task-muted">该任务没有工具。</p>';
+    return;
+  }
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">工具快照</span><span class="badge">${tools.length}</span></div>
+    <div class="task-tool-list">${tools.map(t => `<div class="task-tool-item">
+      <div class="task-tool-name"><span class="mono">${esc(t.name)}</span><span class="badge">${esc(t.source || '')}</span></div>
+      <div class="task-tool-meta">v${esc(t.version || '1.0.0')} · ${esc(t.side_effect || 'read')} · ${esc(t.approval_policy || '')}</div>
+      ${t.description ? `<div class="task-tool-desc">${esc(t.description)}</div>` : ''}
+      <div class="task-tool-hash mono">${esc(shortHash(t.schema_hash))}</div>
+    </div>`).join('')}</div>`;
+}
+function renderTaskEvidence(task){
+  const card = $('#task-evidence-card');
+  const list = state.taskEvidence;
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">证据</span><span class="badge">${Number(task.evidence_count) || list.length}</span></div>`
+    + (list.length ? `<div class="task-evidence-list">${list.map(e => `<div class="task-evidence-item">
+        <div class="task-evidence-meta"><span>${esc(e.kb_id || '')}</span><span>${esc(e.document_id || '')}${e.document_version != null ? ' v' + esc(String(e.document_version)) : ''}</span>${e.score != null ? `<span>${Number(e.score).toFixed(3)}</span>` : ''}</div>
+        <div class="task-evidence-excerpt">${esc(e.excerpt || '')}</div>
+      </div>`).join('')}</div>` : '<p class="task-muted">尚未检索到证据。</p>');
+}
+function renderTaskUsage(task){
+  const card = $('#task-usage-card');
+  const u = task.usage || {};
+  const items = [
+    ['步骤', u.steps], ['模型调用', u.model_calls], ['工具调用', u.tool_calls],
+    ['输入 tokens', u.input_tokens], ['输出 tokens', u.output_tokens], ['耗时', u.wall_ms ? fmtMs(u.wall_ms) : '—'],
+  ];
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">用量</span></div>
+    <div class="task-usage-grid">${items.map(([k, v]) => `<div class="task-usage-item"><div class="task-usage-k">${esc(k)}</div><div class="task-usage-v">${esc(String(v ?? 0))}</div></div>`).join('')}</div>
+    <div class="task-kv" style="margin-top:10px"><span>事件序号</span><b>${esc(String(task.last_event_seq ?? 0))}</b></div>
+    <div class="task-kv"><span>检查点步骤</span><b>${esc(String(task.checkpoint_step ?? 0))}</b></div>`;
+}
+
+function closeTaskStream(){
+  if (state.taskStream){
+    try { state.taskStream.abort(); } catch {}
+    state.taskStream = null;
+  }
+  if (state.taskPollTimer){
+    clearTimeout(state.taskPollTimer);
+    state.taskPollTimer = null;
+  }
+}
+let taskRefreshTimer = null;
+function scheduleTaskRefresh(){
+  clearTimeout(taskRefreshTimer);
+  taskRefreshTimer = setTimeout(() => { refreshTaskDetail(false); }, 250);
+}
+async function connectTaskStream(taskId){
+  closeTaskStream();
+  const lastSeq = state.taskEvents.length ? state.taskEvents[state.taskEvents.length - 1].seq : 0;
+  const ctrl = new AbortController();
+  state.taskStream = ctrl;
+  let gotAny = false;
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/events?after=${Number(lastSeq) || 0}`, {
+      headers: { Authorization: 'Bearer ' + API.token },
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) throw new Error('SSE unavailable');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true){
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0){
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        handleTaskStreamChunk(chunk);
+        gotAny = true;
+      }
+    }
+    state.taskStream = null;
+    if (currentView === 'task-detail' && state.currentTask?.id === taskId){
+      await refreshTaskDetail(false);
+      scheduleTaskPoll(taskId);
+    }
+  } catch (e){
+    if (e.name === 'AbortError') return;
+    state.taskStream = null;
+    scheduleTaskPoll(taskId);
+  }
+  if (!gotAny && currentView === 'task-detail' && state.currentTask?.id === taskId) scheduleTaskPoll(taskId);
+}
+function scheduleTaskPoll(taskId){
+  if (state.taskPollTimer) clearTimeout(state.taskPollTimer);
+  state.taskPollTimer = setTimeout(async () => {
+    state.taskPollTimer = null;
+    if (currentView !== 'task-detail' || state.currentTask?.id !== taskId) return;
+    await refreshTaskDetail(false);
+    if (!['completed', 'failed', 'cancelled'].includes(state.currentTask?.status)) scheduleTaskPoll(taskId);
+  }, 3000);
+}
+function handleTaskStreamChunk(chunk){
+  let ev = 'message';
+  let data = null;
+  for (const line of chunk.split('\n')){
+    if (line.startsWith('event: ')) ev = line.slice(7).trim();
+    else if (line.startsWith('data: ')) data = line.slice(6);
+  }
+  if (!data) return;
+  if (ev === 'end' || ev === 'gap'){
+    refreshTaskDetail(false).then(() => loadTaskBadges());
+    return;
+  }
+  if (ev === 'error') return;
+  let payload;
+  try { payload = JSON.parse(data); } catch { return; }
+  if (payload?.seq && !state.taskEvents.some(e => e.seq === payload.seq)) state.taskEvents.push(payload);
+  if (ev === 'message.created'){
+    loadTaskMessages(state.currentTask.id).then(() => renderTaskMessages(state.currentTask));
+    scheduleTaskRefresh();
+  } else if (ev === 'evidence.retrieved'){
+    loadTaskEvidence(state.currentTask.id).then(() => renderTaskEvidence(state.currentTask));
+    scheduleTaskRefresh();
+  } else {
+    scheduleTaskRefresh();
+  }
+  if (ev.startsWith('tool.') || ev === 'approval.decided' || ev === 'policy.denied') renderTaskEvents();
+  if (ev === 'task.waiting_approval' || ev === 'task.waiting_input' || ev === 'task.completed' || ev === 'task.failed' || ev === 'task.cancelled'){
+    loadTaskBadges();
+  }
+}
+
+/* ================= Agent 平台管理 ================= */
+function adminPlaceholder(box, { title = '需要管理员权限', text = '当前账户没有访问该配置的权限。', action = '' } = {}){
+  box.innerHTML = `<div class="settings-placeholder"><div class="empty-icon"><svg class="ic" style="width:28px;height:28px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div><h3>${esc(title)}</h3><p>${esc(text)}</p>${action}</div>`;
+}
+function platformDisabledHint(e){
+  return /不存在/.test(String(e?.message || ''));
+}
+
+/* ---------- 工具注册表 ---------- */
+async function renderToolRegistryPane(){
+  const box = $('#settings-content');
+  if (!state.user?.is_admin){
+    adminPlaceholder(box, { title: '需要管理员权限', text: '工具策略仅平台管理员或组织 owner/admin 可配置。' });
+    return;
+  }
+  box.innerHTML = '<div class="settings-section-title">统一工具注册表</div><p class="form-hint">任务创建时会把工具完整描述快照到任务中；执行时再次校验版本与哈希。默认策略为拒绝，未注册或已停用的工具无法被调用。</p><div id="registry-pane"><div class="task-loading">加载中…</div></div>';
+  const pane = $('#registry-pane');
+  try {
+    const d = await API.get('/tools/registry');
+    state.registryTools = d.tools || [];
+  } catch (e){
+    if (platformDisabledHint(e)) return adminPlaceholder(pane, { title: 'Agent 平台未启用', text: '设置 AGENT_PLATFORM_ENABLED=1 与 DATABASE_URL 后重试。' });
+    return adminPlaceholder(pane, { title: '读取失败', text: e.message });
+  }
+  if (!state.registryTools.length){
+    pane.innerHTML = '<p class="form-hint">注册表为空。内置知识工具会随服务启动自动提供；自定义工具在工具箱上传；MCP 工具在连接刷新后写入。</p>';
+    return;
+  }
+  const groups = { builtin: [], custom: [], mcp: [] };
+  for (const t of state.registryTools) (groups[t.source] || (groups[t.source] = [])).push(t);
+  const section = (title, list) => list.length ? `<div class="settings-section-title">${title}</div><div class="registry-list">${list.map(t => {
+    const risky = t.side_effect && t.side_effect !== 'read';
+    return `<div class="registry-row">
+      <div class="registry-main">
+        <div class="registry-name"><span class="mono">${esc(t.name)}</span><span class="badge">${esc(t.source)}</span><span class="badge">v${esc(t.version || '1.0.0')}</span><span class="badge ${risky ? 'warn' : 'brand'}">${esc(t.side_effect || 'read')}</span>${t.enabled === false ? '<span class="badge error">已停用</span>' : ''}</div>
+        <div class="registry-desc">${esc(t.description || '暂无描述')}</div>
+        <div class="registry-meta">审批策略 ${esc(t.approval_policy || '—')} · schema ${esc(shortHash(t.schema_hash))}${t.owner_id ? ' · owner ' + esc(shortId(t.owner_id)) : ''}</div>
+      </div>
+      <button class="btn small" data-policy="${esc(t.name)}">策略</button>
+    </div>`;
+  }).join('')}</div>` : '';
+  pane.innerHTML = section('内置工具', groups.builtin) + section('自定义工具', groups.custom) + section('MCP 工具', groups.mcp) + section('其他', groups.other || []);
+  $$('[data-policy]', pane).forEach(btn => btn.addEventListener('click', () => openToolPolicyDialog(btn.getAttribute('data-policy'))));
+}
+
+async function openToolPolicyDialog(name){
+  const tool = state.registryTools.find(t => t.name === name);
+  if (!tool) return;
+  let policies = [];
+  try { policies = (await API.get(`/tools/registry/${encodeURIComponent(name)}/policies`)).policies || []; } catch {}
+  const tenantPolicy = policies.find(p => p.principal_type === 'tenant') || policies[0] || {};
+  const scopes = Array.isArray(tenantPolicy.allowed_scopes) ? tenantPolicy.allowed_scopes.join(', ') : '';
+  const dlg = openDialog(`
+    <h3>工具策略</h3>
+    <p class="dlg-sub mono">${esc(name)}</p>
+    <div class="dlg-body">
+      <div class="dialog-note">策略优先级：user &gt; role &gt; preset &gt; tenant。未配置时默认按工具风险判断；高风险副作用始终需要审批。</div>
+      <div class="form-row2">
+        <div>
+          <label class="form-label">主体类型</label>
+          <select class="form-select" id="tp-type">
+            <option value="tenant" ${(tenantPolicy.principal_type || 'tenant') === 'tenant' ? 'selected' : ''}>整个租户</option>
+            <option value="user" ${tenantPolicy.principal_type === 'user' ? 'selected' : ''}>指定用户</option>
+            <option value="role" ${tenantPolicy.principal_type === 'role' ? 'selected' : ''}>角色</option>
+            <option value="preset" ${tenantPolicy.principal_type === 'preset' ? 'selected' : ''}>预设</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">主体 ID</label>
+          <input class="form-input" id="tp-principal" placeholder="tenant 可留空" value="${esc(tenantPolicy.principal_type === 'tenant' ? '' : tenantPolicy.principal_id || '')}">
+        </div>
+      </div>
+      <label class="form-label">审批模式</label>
+      <select class="form-select" id="tp-approval">
+        <option value="risk_based" ${(tenantPolicy.approval_mode || 'risk_based') === 'risk_based' ? 'selected' : ''}>按风险（推荐）</option>
+        <option value="always" ${tenantPolicy.approval_mode === 'always' ? 'selected' : ''}>始终审批</option>
+        <option value="never" ${tenantPolicy.approval_mode === 'never' ? 'selected' : ''}>从不审批（不降级高风险）</option>
+      </select>
+      <label class="form-label">单任务最大调用次数</label>
+      <input class="form-input" id="tp-max" type="number" min="0" placeholder="留空表示不限制" value="${tenantPolicy.max_calls_per_task ?? ''}">
+      <label class="form-label">允许的资源范围</label>
+      <input class="form-input" id="tp-scopes" placeholder="多个范围用逗号分隔，留空表示不限" value="${esc(scopes)}">
+      <label class="form-check" style="margin-top:14px"><input type="checkbox" id="tp-enabled" ${tenantPolicy.enabled !== false ? 'checked' : ''}>启用该工具</label>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn dlg-close">取消</button>
+      <button class="btn primary" id="tp-save">保存策略</button>
+    </div>`);
+  $('#tp-save', dlg).addEventListener('click', async () => {
+    const principalType = $('#tp-type', dlg).value;
+    const principalId = $('#tp-principal', dlg).value.trim();
+    if (principalType !== 'tenant' && !principalId) return toast('请填写主体 ID', false);
+    const max = $('#tp-max', dlg).value.trim();
+    const body = {
+      principal_type: principalType,
+      principal_id: principalId || undefined,
+      approval_mode: $('#tp-approval', dlg).value,
+      max_calls_per_task: max === '' ? null : Number(max),
+      allowed_scopes: $('#tp-scopes', dlg).value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+      enabled: $('#tp-enabled', dlg).checked,
+    };
+    try {
+      await API.req(`/tools/registry/${encodeURIComponent(name)}/policy`, { method: 'PATCH', body });
+      closeDialog();
+      toast('策略已保存');
+      renderToolRegistryPane();
+    } catch (e){ toast(e.message, false); }
+  });
+}
+
+/* ---------- MCP 连接 ---------- */
+async function renderMcpPane(){
+  const box = $('#settings-content');
+  if (!state.user?.is_admin){
+    adminPlaceholder(box, { title: '需要管理员权限', text: 'MCP 连接仅平台管理员或组织 owner/admin 可配置。' });
+    return;
+  }
+  box.innerHTML = '<div class="settings-section-title">MCP 连接（出站 Streamable HTTP）</div>'
+    + '<p class="form-hint">只支持 Streamable HTTP。凭证只保存 <code>credential_ref</code>（如 <code>env:MCP_TOKEN</code>），接口不会回显。工具描述与结果一律视为不可信。</p>'
+    + '<button class="btn primary" id="mcp-add" style="margin-bottom:14px">新增连接</button><div id="mcp-list"><div class="task-loading">加载中…</div></div>';
+  $('#mcp-add').addEventListener('click', () => openMcpEditor(null));
+  const list = $('#mcp-list');
+  try {
+    state.mcpConnections = (await API.get('/mcp/connections')).connections || [];
+  } catch (e){
+    if (platformDisabledHint(e)) return adminPlaceholder(list, { title: 'Agent 平台未启用', text: '设置 AGENT_PLATFORM_ENABLED=1 与 DATABASE_URL 后重试。' });
+    return adminPlaceholder(list, { title: '读取失败', text: e.message });
+  }
+  if (!state.mcpConnections.length){
+    list.innerHTML = '<p class="form-hint">还没有 MCP 连接。新增连接后点击「刷新工具」把远端工具写入注册表。</p>';
+    return;
+  }
+  list.innerHTML = '<div class="registry-list">' + state.mcpConnections.map(c => `<div class="registry-row">
+    <div class="registry-main">
+      <div class="registry-name"><span class="mono">${esc(c.name)}</span><span class="badge ${c.status === 'healthy' ? 'brand' : ''}">${esc(c.status || 'unknown')}</span><span class="badge">${esc(c.transport)}</span>${c.credential_configured ? '<span class="badge brand">凭证已配置</span>' : '<span class="badge">无凭证</span>'}</div>
+      <div class="registry-desc mono">${esc(c.endpoint)}</div>
+      <div class="registry-meta">允许 ${c.allowed_tools?.length || 0} · 拒绝 ${c.denied_tools?.length || 0} · 最近健康检查 ${esc(fmtTime(c.last_health_at))}</div>
+    </div>
+    <div class="registry-actions">
+      <button class="btn small" data-mcp-test="${esc(c.id)}">测试</button>
+      <button class="btn small" data-mcp-tools="${esc(c.id)}">工具</button>
+      <button class="btn small" data-mcp-refresh="${esc(c.id)}">刷新工具</button>
+      <button class="btn small" data-mcp-edit="${esc(c.id)}">编辑</button>
+      <button class="btn small" data-mcp-del="${esc(c.id)}">删除</button>
+    </div>
+  </div>`).join('') + '</div>';
+  $$('[data-mcp-test]', list).forEach(b => b.addEventListener('click', () => mcpTest(b.getAttribute('data-mcp-test'))));
+  $$('[data-mcp-tools]', list).forEach(b => b.addEventListener('click', () => showMcpTools(b.getAttribute('data-mcp-tools'))));
+  $$('[data-mcp-refresh]', list).forEach(b => b.addEventListener('click', () => mcpRefresh(b.getAttribute('data-mcp-refresh'))));
+  $$('[data-mcp-edit]', list).forEach(b => b.addEventListener('click', () => openMcpEditor(state.mcpConnections.find(c => c.id === b.getAttribute('data-mcp-edit')))));
+  $$('[data-mcp-del]', list).forEach(b => b.addEventListener('click', () => mcpDelete(b.getAttribute('data-mcp-del'))));
+}
+function openMcpEditor(conn){
+  const isNew = !conn;
+  const dlg = openDialog(`
+    <h3>${isNew ? '新增 MCP 连接' : '编辑 MCP 连接'}</h3>
+    <p class="dlg-sub">Streamable HTTP 端点。stdio 在 P0 阶段不开放。</p>
+    <div class="dlg-body">
+      <label class="form-label">名称</label>
+      <input class="form-input" id="mc-name" value="${esc(conn?.name || '')}" placeholder="例如：company-tools" ${isNew ? '' : 'disabled'}>
+      <label class="form-label">Endpoint</label>
+      <input class="form-input" id="mc-endpoint" value="${esc(conn?.endpoint || '')}" placeholder="https://mcp.example.com/mcp">
+      <div class="form-row2">
+        <div>
+          <label class="form-label">认证方式</label>
+          <select class="form-select" id="mc-auth"><option value="none" ${conn?.auth_type !== 'bearer' ? 'selected' : ''}>无</option><option value="bearer" ${conn?.auth_type === 'bearer' ? 'selected' : ''}>Bearer</option></select>
+        </div>
+        <div>
+          <label class="form-label">凭证引用</label>
+          <input class="form-input" id="mc-credential" placeholder="env:MCP_TOKEN" value="">
+        </div>
+      </div>
+      <p class="form-hint">凭证仅保存引用，不回显。留空表示不修改${isNew ? '' : '（当前' + (conn.credential_configured ? '已配置' : '未配置') + '）'}。</p>
+      <label class="form-label">允许的工具</label>
+      <input class="form-input" id="mc-allowed" placeholder="逗号分隔；留空表示全部允许" value="${esc((conn?.allowed_tools || []).join(', '))}">
+      <label class="form-label">拒绝的工具</label>
+      <input class="form-input" id="mc-denied" placeholder="逗号分隔" value="${esc((conn?.denied_tools || []).join(', '))}">
+    </div>
+    <div class="dlg-foot"><button class="btn dlg-close">取消</button><button class="btn primary" id="mc-save">保存</button></div>`);
+  $('#mc-save', dlg).addEventListener('click', async () => {
+    const name = $('#mc-name', dlg).value.trim();
+    const endpoint = $('#mc-endpoint', dlg).value.trim();
+    if (!name || !endpoint) return toast('名称与 Endpoint 不能为空', false);
+    const body = {
+      name, endpoint,
+      transport: 'streamable_http',
+      auth_type: $('#mc-auth', dlg).value,
+      allowed_tools: $('#mc-allowed', dlg).value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+      denied_tools: $('#mc-denied', dlg).value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    };
+    const cred = $('#mc-credential', dlg).value.trim();
+    if (cred) body.credential_ref = cred;
+    try {
+      if (isNew) await API.post('/mcp/connections', body);
+      else await API.req('/mcp/connections/' + conn.id, { method: 'PATCH', body });
+      closeDialog();
+      toast('MCP 连接已保存');
+      renderMcpPane();
+    } catch (e){ toast(e.message, false); }
+  });
+}
+async function mcpTest(id){
+  try {
+    const r = await API.post(`/mcp/connections/${id}/test`, {});
+    toast(r.ok ? `连接正常，发现 ${r.tools_count} 个工具` : `连接失败：${r.message}`, !!r.ok);
+    renderMcpPane();
+  } catch (e){ toast(e.message, false); }
+}
+async function mcpRefresh(id){
+  try {
+    const r = await API.post(`/mcp/connections/${id}/refresh`, {});
+    toast(`已刷新 ${r.tools.length} 个工具`);
+    renderMcpPane();
+  } catch (e){ toast(e.message, false); }
+}
+async function showMcpTools(id){
+  try {
+    const d = await API.get(`/mcp/connections/${id}/tools`);
+    const list = d.tools || [];
+    const dlg = openDialog(`<h3>MCP 工具</h3><p class="dlg-sub">共 ${list.length} 个缓存工具（描述不可信）</p>
+      <div class="dlg-body">${list.length ? `<div class="registry-list">${list.map(t => `<div class="registry-row"><div class="registry-main"><div class="registry-name"><span class="mono">${esc(t.tool_name || t.name || '')}</span></div><div class="registry-desc">${esc(t.description || '')}</div><div class="registry-meta">schema ${esc(shortHash(t.schema_hash))}</div></div></div>`).join('')}</div>` : '<p class="task-muted">暂无缓存工具，请先刷新。</p>'}</div>
+      <div class="dlg-foot"><button class="btn dlg-close">关闭</button></div>`, { lg: true });
+  } catch (e){ toast(e.message, false); }
+}
+async function mcpDelete(id){
+  const conn = state.mcpConnections.find(c => c.id === id);
+  if (!conn || !confirm(`删除 MCP 连接「${conn.name}」？相关 MCP 工具将停用。`)) return;
+  try {
+    await API.del('/mcp/connections/' + id);
+    toast('已删除');
+    renderMcpPane();
+  } catch (e){ toast(e.message, false); }
+}
+
+/* ---------- 平台模型 ---------- */
+async function renderModelProfilesPane(){
+  const box = $('#settings-content');
+  if (!state.user?.is_platform_admin){
+    adminPlaceholder(box, { title: '需要平台管理员权限', text: 'Agent 任务的模型 profile 仅平台管理员（PLATFORM_ADMIN_EMAILS）可配置。' });
+    return;
+  }
+  box.innerHTML = '<div class="settings-section-title">Agent 模型 profile</div>'
+    + '<p class="form-hint">供 Worker 解析任务预设所用。凭证只保存 <code>env:NAME</code> 或 <code>file:相对路径</code> 引用，接口只返回是否已配置。</p>'
+    + '<button class="btn primary" id="mp-add" style="margin-bottom:14px">添加模型 profile</button><div id="mp-list"><div class="task-loading">加载中…</div></div>';
+  $('#mp-add').addEventListener('click', () => openModelProfileEditor(null));
+  const list = $('#mp-list');
+  try {
+    state.modelProfiles = (await API.get('/model-profiles')).profiles || [];
+  } catch (e){
+    if (platformDisabledHint(e)) return adminPlaceholder(list, { title: 'Agent 平台未启用', text: '设置 AGENT_PLATFORM_ENABLED=1 与 DATABASE_URL 后重试。' });
+    return adminPlaceholder(list, { title: '读取失败', text: e.message });
+  }
+  if (!state.modelProfiles.length){
+    list.innerHTML = '<p class="form-hint">还没有模型 profile。任务如果没有绑定预设，Worker 会回退到环境变量中的模型配置。</p>';
+    return;
+  }
+  list.innerHTML = '<div class="registry-list">' + state.modelProfiles.map(p => `<div class="registry-row">
+    <div class="registry-main">
+      <div class="registry-name"><span>${esc(p.name)}</span><span class="badge">${esc(p.provider || '兼容接口')}</span><span class="badge">${esc(p.model_name)}</span>${p.enabled ? '<span class="badge brand">启用</span>' : '<span class="badge">停用</span>'}<span class="badge ${p.credential_configured ? 'brand' : 'warn'}">${p.credential_configured ? '凭证已配置' : '缺少凭证'}</span></div>
+      <div class="registry-desc mono">${esc(p.base_url)}</div>
+      <div class="registry-meta">上下文 ${esc(String(p.context_window || '—'))} · 能力 ${esc(JSON.stringify(p.capabilities || {}))}</div>
+    </div>
+    <div class="registry-actions">
+      <button class="btn small" data-mp-test="${esc(p.id)}">测试</button>
+      <button class="btn small" data-mp-edit="${esc(p.id)}">编辑</button>
+      <button class="btn small" data-mp-del="${esc(p.id)}">删除</button>
+    </div>
+  </div>`).join('') + '</div>';
+  $$('[data-mp-test]', list).forEach(b => b.addEventListener('click', () => testModelProfile(b.getAttribute('data-mp-test'))));
+  $$('[data-mp-edit]', list).forEach(b => b.addEventListener('click', () => openModelProfileEditor(state.modelProfiles.find(p => p.id === b.getAttribute('data-mp-edit')))));
+  $$('[data-mp-del]', list).forEach(b => b.addEventListener('click', () => deleteModelProfile(b.getAttribute('data-mp-del'))));
+}
+function openModelProfileEditor(profile){
+  const isNew = !profile;
+  const dlg = openDialog(`
+    <h3>${isNew ? '添加模型 profile' : '编辑模型 profile'}</h3>
+    <p class="dlg-sub">用于 Agent 任务 Worker。Base URL 不能指向本机、私网或云元数据地址。</p>
+    <div class="dlg-body">
+      <label class="form-label">名称</label>
+      <input class="form-input" id="mpe-name" value="${esc(profile?.name || '')}" placeholder="例如：生产对话模型">
+      <div class="form-row2">
+        <div><label class="form-label">供应商</label><input class="form-input" id="mpe-provider" value="${esc(profile?.provider || '')}" placeholder="deepseek / qwen / vllm"></div>
+        <div><label class="form-label">模型 ID</label><input class="form-input" id="mpe-model" value="${esc(profile?.model_name || '')}" placeholder="deepseek-chat"></div>
+      </div>
+      <label class="form-label">Base URL</label>
+      <input class="form-input" id="mpe-url" value="${esc(profile?.base_url || '')}" placeholder="https://api.deepseek.com/v1">
+      <label class="form-label">凭证引用</label>
+      <input class="form-input" id="mpe-credential" placeholder="env:DEEPSEEK_API_KEY 或 file:deepseek.key" value="">
+      <p class="form-hint">只写 <code>env:变量名</code> 或 <code>file:EKH_MODEL_SECRET_DIR 下的相对路径</code>，不会回显。${isNew ? '' : '留空表示保持不变。'}</p>
+      <div class="form-row2">
+        <div><label class="form-label">上下文窗口</label><input class="form-input" id="mpe-ctx" type="number" min="0" value="${profile?.context_window ?? ''}" placeholder="128000"></div>
+        <div><label class="form-label">能力</label><input class="form-input" id="mpe-cap" placeholder='{"tools":true}' value="${esc(profile ? JSON.stringify(profile.capabilities || {}) : '')}"></div>
+      </div>
+      <label class="form-check" style="margin-top:14px"><input type="checkbox" id="mpe-enabled" ${profile?.enabled !== false ? 'checked' : ''}>启用</label>
+    </div>
+    <div class="dlg-foot"><button class="btn dlg-close">取消</button><button class="btn primary" id="mpe-save">保存</button></div>`);
+  $('#mpe-save', dlg).addEventListener('click', async () => {
+    const name = $('#mpe-name', dlg).value.trim();
+    const baseUrl = $('#mpe-url', dlg).value.trim();
+    const modelName = $('#mpe-model', dlg).value.trim();
+    if (!name || !baseUrl || !modelName) return toast('名称、Base URL 与模型 ID 不能为空', false);
+    let capabilities = {};
+    const capRaw = $('#mpe-cap', dlg).value.trim();
+    if (capRaw){
+      try { capabilities = JSON.parse(capRaw); } catch { return toast('能力必须是合法 JSON', false); }
+    }
+    const body = {
+      name, provider: $('#mpe-provider', dlg).value.trim(), base_url: baseUrl, model_name: modelName,
+      capabilities, context_window: Number($('#mpe-ctx', dlg).value) || null,
+      enabled: $('#mpe-enabled', dlg).checked,
+    };
+    const cred = $('#mpe-credential', dlg).value.trim();
+    if (cred) body.credential_ref = cred;
+    try {
+      if (isNew) await API.post('/model-profiles', body);
+      else await API.req('/model-profiles/' + profile.id, { method: 'PATCH', body });
+      closeDialog();
+      toast('模型 profile 已保存');
+      renderModelProfilesPane();
+    } catch (e){ toast(e.message, false); }
+  });
+}
+async function testModelProfile(id){
+  try {
+    const r = await API.post(`/model-profiles/${id}/test`, {});
+    toast(r.ok ? `连接正常：${r.message}` : `连接失败：${r.message}`, !!r.ok);
+  } catch (e){ toast(e.message, false); }
+}
+async function deleteModelProfile(id){
+  const p = state.modelProfiles.find(x => x.id === id);
+  if (!p || !confirm(`删除模型 profile「${p.name}」？`)) return;
+  try {
+    await API.del('/model-profiles/' + id);
+    toast('已删除');
+    renderModelProfilesPane();
+  } catch (e){ toast(e.message, false); }
+}
+
+/* ---------- 服务主体 ---------- */
+async function renderServicePrincipalsPane(){
+  const box = $('#settings-content');
+  if (!state.user?.is_platform_admin){
+    adminPlaceholder(box, { title: '需要平台管理员权限', text: '服务主体仅平台管理员可创建与轮换。' });
+    return;
+  }
+  await loadTaskRegistry();
+  box.innerHTML = '<div class="settings-section-title">服务主体（入站 API / MCP）</div>'
+    + '<p class="form-hint">服务主体 token 只保存 SHA-256；创建或轮换时明文只显示一次。知识库范围默认拒绝，需显式授权。</p>'
+    + '<button class="btn primary" id="sp-add" style="margin-bottom:14px">创建服务主体</button><div id="sp-list"><div class="task-loading">加载中…</div></div>';
+  $('#sp-add').addEventListener('click', openServicePrincipalEditor);
+  const list = $('#sp-list');
+  try {
+    state.servicePrincipals = (await API.get('/service-principals')).principals || [];
+  } catch (e){
+    if (platformDisabledHint(e)) return adminPlaceholder(list, { title: 'Agent 平台未启用', text: '设置 AGENT_PLATFORM_ENABLED=1 与 DATABASE_URL 后重试。' });
+    return adminPlaceholder(list, { title: '读取失败', text: e.message });
+  }
+  if (!state.servicePrincipals.length){
+    list.innerHTML = '<p class="form-hint">还没有服务主体。旧全局 <code>EKH_SERVICE_TOKEN</code> 只作为兼容主体使用，生产环境建议关闭。</p>';
+    return;
+  }
+  list.innerHTML = '<div class="registry-list">' + state.servicePrincipals.map(p => {
+    const scopes = p.scopes || {};
+    const scopeText = scopes.all_kbs ? '全部知识库' : `${(scopes.kb_ids || []).length} 个知识库`;
+    return `<div class="registry-row">
+      <div class="registry-main">
+        <div class="registry-name"><span>${esc(p.name)}</span>${p.revoked_at ? '<span class="badge error">已吊销</span>' : '<span class="badge brand">有效</span>'}<span class="badge">${scopeText}</span><span class="badge">${(scopes.tools || []).length} 个工具</span></div>
+        <div class="registry-meta">创建 ${esc(fmtTime(p.created_at))} · 最近使用 ${esc(p.last_used_at ? fmtTime(p.last_used_at) : '—')} · 过期 ${esc(p.expires_at ? fmtTime(p.expires_at) : '永不过期')}</div>
+      </div>
+      <div class="registry-actions">
+        <button class="btn small" data-sp-rotate="${esc(p.id)}" ${p.revoked_at ? 'disabled' : ''}>轮换 token</button>
+        <button class="btn small" data-sp-revoke="${esc(p.id)}" ${p.revoked_at ? 'disabled' : ''}>吊销</button>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+  $$('[data-sp-rotate]', list).forEach(b => b.addEventListener('click', () => rotateServicePrincipal(b.getAttribute('data-sp-rotate'))));
+  $$('[data-sp-revoke]', list).forEach(b => b.addEventListener('click', () => revokeServicePrincipal(b.getAttribute('data-sp-revoke'))));
+}
+function openServicePrincipalEditor(){
+  const kbs = state.kbs || [];
+  const tools = state.registryTools || [];
+  const dlg = openDialog(`
+    <h3>创建服务主体</h3>
+    <p class="dlg-sub">用于 <code>/api/retrieve</code> 与 <code>/mcp</code>。token 只显示一次。</p>
+    <div class="dlg-body">
+      <label class="form-label">名称</label>
+      <input class="form-input" id="spe-name" placeholder="例如：bi-dashboard">
+      <label class="form-check" style="margin-top:14px"><input type="checkbox" id="spe-all-kbs" checked>允许访问全部知识库</label>
+      <label class="form-label">知识库白名单</label>
+      <div class="form-checks" id="spe-kbs">${kbs.map(kb => `<label class="form-check"><input type="checkbox" value="${esc(kb.id)}" disabled>${esc(kb.name)}</label>`).join('') || '<span class="form-hint">暂无知识库</span>'}</div>
+      <label class="form-label">允许的工具</label>
+      <div class="form-checks" id="spe-tools">${tools.map(t => `<label class="form-check"><input type="checkbox" value="${esc(t.name)}"><span class="mono">${esc(t.name)}</span></label>`).join('') || '<span class="form-hint">工具注册表不可用</span>'}</div>
+      <label class="form-label">过期时间（可选）</label>
+      <input class="form-input" id="spe-expires" type="datetime-local">
+    </div>
+    <div class="dlg-foot"><button class="btn dlg-close">取消</button><button class="btn primary" id="spe-save">创建</button></div>`, { lg: true });
+  const toggleKbs = () => {
+    const all = $('#spe-all-kbs', dlg).checked;
+    $$('#spe-kbs input', dlg).forEach(i => { i.disabled = all; if (all) i.checked = false; });
+  };
+  $('#spe-all-kbs', dlg).addEventListener('change', toggleKbs);
+  toggleKbs();
+  $('#spe-save', dlg).addEventListener('click', async () => {
+    const name = $('#spe-name', dlg).value.trim();
+    if (!name) return toast('请填写名称', false);
+    const allKbs = $('#spe-all-kbs', dlg).checked;
+    const expires = $('#spe-expires', dlg).value;
+    const body = {
+      name,
+      scopes: {
+        all_kbs: allKbs,
+        kb_ids: allKbs ? [] : $$('#spe-kbs input:checked', dlg).map(i => i.value),
+        tools: $$('#spe-tools input:checked', dlg).map(i => i.value),
+      },
+      expires_at: expires ? new Date(expires).toISOString() : null,
+    };
+    try {
+      const r = await API.post('/service-principals', body);
+      closeDialog();
+      showServiceToken(r.token, r.principal);
+      renderServicePrincipalsPane();
+    } catch (e){ toast(e.message, false); }
+  });
+}
+function showServiceToken(token, principal){
+  const dlg = openDialog(`
+    <h3>服务主体 token</h3>
+    <p class="dlg-sub">明文 token 只显示这一次，关闭后无法再次查看。</p>
+    <div class="dlg-body">
+      <label class="form-label">${esc(principal?.name || '')}</label>
+      <textarea class="form-textarea mono" id="st-token" rows="3" readonly>${esc(token)}</textarea>
+      <p class="form-hint">请立即复制并存入密钥管理系统。</p>
+      <div class="test-result ok" id="st-copied"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn primary" id="st-copy">复制 token</button><button class="btn dlg-close">我已保存</button></div>`);
+  $('#st-copy', dlg).addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(token);
+      $('#st-copied', dlg).textContent = '已复制到剪贴板';
+    } catch { $('#st-token', dlg).select(); $('#st-copied', dlg).textContent = '已选中，请手动复制'; }
+  });
+}
+async function rotateServicePrincipal(id){
+  if (!confirm('轮换后旧 token 立即失效，确认继续？')) return;
+  try {
+    const r = await API.post(`/service-principals/${id}/rotate`, {});
+    showServiceToken(r.token, r.principal);
+    renderServicePrincipalsPane();
+  } catch (e){ toast(e.message, false); }
+}
+async function revokeServicePrincipal(id){
+  if (!confirm('确认吊销该服务主体？')) return;
+  try {
+    await API.del(`/service-principals/${id}`);
+    toast('已吊销');
+    renderServicePrincipalsPane();
+  } catch (e){ toast(e.message, false); }
+}
 
 /* ================= 共享空间 ================= */
 async function loadOrgs(){
@@ -1864,7 +3014,10 @@ $('#settings-nav').addEventListener('click', e => {
 
 function renderSettings(){
   const box = $('#settings-content');
-  const titles = { general: '常规设置', profile: '用户信息', memories: '我的记忆', models: '模型管理', members: '成员管理', tools: '工具开关', about: '关于' };
+  const titles = {
+    general: '常规设置', profile: '用户信息', memories: '我的记忆', models: '模型管理', members: '成员管理', tools: '工具开关', about: '关于',
+    'tool-registry': '工具注册表', mcp: 'MCP 连接', 'model-profiles': '平台模型', 'service-principals': '服务主体',
+  };
   $('#settings-title').textContent = titles[settingsPane] || '设置';
   if (settingsPane === 'general'){
     const chatModels = state.models.filter(m => m.kind === 'chat');
@@ -1939,6 +3092,10 @@ function renderSettings(){
     renderModelsPane();
     return;
   }
+  if (settingsPane === 'tool-registry'){ renderToolRegistryPane(); return; }
+  if (settingsPane === 'mcp'){ renderMcpPane(); return; }
+  if (settingsPane === 'model-profiles'){ renderModelProfilesPane(); return; }
+  if (settingsPane === 'service-principals'){ renderServicePrincipalsPane(); return; }
   if (settingsPane === 'members'){
     renderMembersPane();
     return;
@@ -1984,7 +3141,11 @@ async function loadMemoriesPane(){
 const MODEL_KIND_ORDER = ['chat', 'embedding', 'rerank'];
 function renderModelsPane(){
   const box = $('#settings-content');
-  box.innerHTML = '<button class="btn primary" id="add-model-btn" style="margin-bottom:16px"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>添加模型</button><div id="model-groups"></div>';
+  const canManage = !!state.user?.is_platform_admin;
+  box.innerHTML = (canManage
+    ? '<button class="btn primary" id="add-model-btn" style="margin-bottom:16px"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>添加模型</button>'
+    : '<p class="form-hint" style="margin-bottom:16px">模型配置由平台管理员（<code>PLATFORM_ADMIN_EMAILS</code>）维护，当前为只读视图。</p>')
+    + '<div id="model-groups"></div>';
   const gbox = $('#model-groups');
   for (const kind of MODEL_KIND_ORDER){
     const list = state.models.filter(m => m.kind === kind);
@@ -1998,25 +3159,29 @@ function renderModelsPane(){
         `<span class="m-icon" style="background:${MODEL_COLORS[m.kind]};color:#fff"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3"/></svg></span>` +
         '<div class="m-info"><div class="m-name"></div><div class="m-provider"></div></div>' +
         `${m.is_default ? '<span class="badge brand">默认</span>' : ''}<span class="m-usage"></span>` +
-        '<button class="icon-btn" title="编辑"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 19.5l1-4L16 5a2.1 2.1 0 0 1 3 3L8.5 18.5l-4 1z" stroke-linejoin="round"/></svg></button>' +
-        '<button class="icon-btn" title="删除"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 7h15M9.5 7V5.5A1.5 1.5 0 0 1 11 4h2a1.5 1.5 0 0 1 1.5 1.5V7m3 0l-.8 11.2a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8L6 7" stroke-linecap="round"/></svg></button>';
+        (canManage
+          ? '<button class="icon-btn" title="编辑"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 19.5l1-4L16 5a2.1 2.1 0 0 1 3 3L8.5 18.5l-4 1z" stroke-linejoin="round"/></svg></button>' +
+            '<button class="icon-btn" title="删除"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4.5 7h15M9.5 7V5.5A1.5 1.5 0 0 1 11 4h2a1.5 1.5 0 0 1 1.5 1.5V7m3 0l-.8 11.2a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8L6 7" stroke-linecap="round"/></svg></button>'
+          : '');
       $('.m-name', row).textContent = m.name;
       $('.m-provider', row).textContent = `${m.provider || '自定义接口'} · ${m.model_name}`;
       $('.m-usage', row).textContent = m.base_url;
-      const [editBtn, delBtn] = $$('button.icon-btn', row);
-      editBtn.addEventListener('click', () => openModelEditor(m));
-      delBtn.addEventListener('click', async () => {
-        if (!confirm(`删除模型「${m.name}」？`)) return;
-        try { await API.del('/models/' + m.id); await loadModels(); renderModelsPane(); toast('已删除'); } catch (e){ toast(e.message, false); }
-      });
-      row.addEventListener('dblclick', async () => {
-        try { await API.put('/models/' + m.id, { is_default: true }); await loadModels(); renderModelsPane(); toast('已设为默认'); } catch {}
-      });
+      if (canManage){
+        const [editBtn, delBtn] = $$('button.icon-btn', row);
+        editBtn.addEventListener('click', () => openModelEditor(m));
+        delBtn.addEventListener('click', async () => {
+          if (!confirm(`删除模型「${m.name}」？`)) return;
+          try { await API.del('/models/' + m.id); await loadModels(); renderModelsPane(); toast('已删除'); } catch (e){ toast(e.message, false); }
+        });
+        row.addEventListener('dblclick', async () => {
+          try { await API.put('/models/' + m.id, { is_default: true }); await loadModels(); renderModelsPane(); toast('已设为默认'); } catch {}
+        });
+      }
       sec.appendChild(row);
     }
     gbox.appendChild(sec);
   }
-  $('#add-model-btn').addEventListener('click', () => openModelEditor(null));
+  $('#add-model-btn')?.addEventListener('click', () => openModelEditor(null));
 }
 function openModelEditor(m){
   const isNew = !m;
@@ -2102,16 +3267,27 @@ async function renderMembersPane(){
 
 /* ================= ⌘K ================= */
 function baseCommands(){
-  return [
+  const items = [
     { label: '新建对话', hint: 'N', icon: 'chat', run: () => { resetNewChat(); showView('chat-new'); } },
     { label: '打开知识库', icon: 'kb', run: () => showView('kb-list') },
     { label: '打开智能体', icon: 'agent', run: () => showView('agents') },
+    { label: '打开任务', icon: 'task', run: () => showView('tasks') },
+    { label: '新建任务', hint: 'Agent', icon: 'task', run: () => { showView('tasks'); openCreateTask(); } },
     { label: '打开产物库', icon: 'art', run: () => showView('artifacts') },
     { label: '打开工具箱', icon: 'tool', run: () => showView('toolbox') },
     { label: '打开共享空间', icon: 'org', run: () => showView('organizations') },
     { label: '打开系统设置', icon: 'set', run: () => openSettings() },
     { label: '切换深色 / 浅色主题', icon: 'theme', run: () => $('#theme-btn').click() },
   ];
+  if (state.user?.is_admin){
+    items.push({ label: '工具注册表', icon: 'tool', run: () => openSettings('tool-registry') });
+    items.push({ label: 'MCP 连接', icon: 'tool', run: () => openSettings('mcp') });
+  }
+  if (state.user?.is_platform_admin){
+    items.push({ label: '平台模型', icon: 'set', run: () => openSettings('model-profiles') });
+    items.push({ label: '服务主体', icon: 'set', run: () => openSettings('service-principals') });
+  }
+  return items;
 }
 async function buildCmdk(q){
   const items = [];

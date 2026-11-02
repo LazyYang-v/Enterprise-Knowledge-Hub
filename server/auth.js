@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from './db.js';
 import { $uuid, $token, hashPassword, verifyPassword, now, err } from './util.js';
+import { isPlatformAdmin, isAdminUser } from './auth/admin.js';
 
 export const authRequired = (req, res, next) => {
   const h = req.headers.authorization || '';
@@ -27,6 +28,15 @@ export function userRole(user){
   return owned > 0 ? 'Owner' : 'Member';
 }
 
+function publicUser(user){
+  return {
+    ...user,
+    role: userRole(user),
+    is_platform_admin: isPlatformAdmin(user),
+    is_admin: isAdminUser(user),
+  };
+}
+
 const router = Router();
 
 router.post('/register', (req, res) => {
@@ -40,14 +50,14 @@ router.post('/register', (req, res) => {
   db.prepare('INSERT INTO users(id, email, name, password_hash, theme, created_at) VALUES(?,?,?,?,?,?)')
     .run(id, String(email).toLowerCase(), (name || String(email).split('@')[0]).slice(0, 32), hashPassword(String(password)), 'light', now());
   const user = db.prepare('SELECT id, email, name, theme, created_at FROM users WHERE id = ?').get(id);
-  res.json({ token: issueToken(id), user: { ...user, role: userRole(user) } });
+  res.json({ token: issueToken(id), user: publicUser(user) });
 });
 
 router.post('/login', (req, res) => {
   const { email, password } = req.body || {};
   const row = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email || '').toLowerCase());
   if (!row || !verifyPassword(String(password || ''), row.password_hash)) return err(res, 401, '邮箱或密码错误');
-  res.json({ token: issueToken(row.id), user: { id: row.id, email: row.email, name: row.name, theme: row.theme, created_at: row.created_at, role: userRole(row) } });
+  res.json({ token: issueToken(row.id), user: publicUser({ id: row.id, email: row.email, name: row.name, theme: row.theme, created_at: row.created_at }) });
 });
 
 router.post('/logout', authRequired, (req, res) => {
@@ -56,7 +66,7 @@ router.post('/logout', authRequired, (req, res) => {
 });
 
 router.get('/me', authRequired, (req, res) => {
-  res.json({ user: { ...req.user, role: userRole(req.user) } });
+  res.json({ user: publicUser(req.user) });
 });
 
 router.put('/me', authRequired, (req, res) => {
@@ -68,7 +78,7 @@ router.put('/me', authRequired, (req, res) => {
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(String(password)), req.user.id);
   }
   const user = db.prepare('SELECT id, email, name, theme, created_at FROM users WHERE id = ?').get(req.user.id);
-  res.json({ user: { ...user, role: userRole(user) } });
+  res.json({ user: publicUser(user) });
 });
 
 export default router;

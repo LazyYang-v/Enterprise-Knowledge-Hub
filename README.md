@@ -39,7 +39,7 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
 
-## P0-0 / P0-1 / P0-2 / P0-3：测试、Runtime、任务持久化与知识版本
+## P0-0 … P0-4：测试、Runtime、任务持久化、知识与工具治理
 
 本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成：
 
@@ -79,6 +79,19 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 - SkillRegistry：`skill.json` + `SKILL.md` + references + evals；内置 `knowledge-research`、`spreadsheet-audit`
 - 新 API：`/api/knowledge/*`、`/api/skills`、`GET /api/tasks/:id/evidence`（均受特性开关控制）
 
+**P0-4 工具、审批、沙箱、MCP 与服务身份**
+
+- 任务创建时快照完整工具描述（schema/版本/代码哈希/副作用），执行阶段只认快照并校验漂移
+- PolicyEngine 默认拒绝；审批一次性绑定 `tool_call_id + args_hash`，审批暂停/恢复，执行前原子消费
+- 自定义工具不可变版本（SQLite v2 `custom_tool_versions`）；代码变化生成新版本
+- 自定义工具在独立 Node 子进程沙箱运行；`require/process/fetch/fs` 被阻断，超时/内存/输出受限
+- 出站 MCP Streamable HTTP 客户端与连接/工具缓存；入站 `service_principals` 哈希令牌 + KB scope
+- `model_profiles` + `credential_ref`：PlatformAdmin 管理，密钥不回显；`base_url` 拒绝私网/元数据地址
+- 新 API：`/api/tools/registry`、`/api/mcp/connections`、`/api/model-profiles`、`/api/service-principals`
+- 前端「任务」工作台：创建任务、SSE 事件时间线、计划/工具/证据/用量、审批（展示真实调用参数）与输入、取消/恢复/补充指令
+- 系统设置新增「Agent 平台」：工具注册表策略、MCP 连接、平台模型、服务主体；入口按 PlatformAdmin / 组织管理员权限显示
+- `/api/auth/me` 返回 `is_platform_admin` / `is_admin`，前端据此隐藏无权操作
+
 ```bash
 npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
 npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
@@ -89,11 +102,11 @@ npm run worker           # 另开终端：领取 Agent 任务（需 AGENT_PLATFO
 npm run repro:baseline   # 生成当前行为快照（会覆盖 docs/baseline）
 ```
 
-P0-2/P0-3 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`）；工具调用在 P0-4 接入前会返回 `tool_unavailable`。
+P0-2/P0-3/P0-4 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`），或在预设中配置 `model_profile_id`。平台管理员通过 `PLATFORM_ADMIN_EMAILS` 指定。
 
 > Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`（SQLite 知识面）。首次对现有 `data/app.db` 运行 P0-3 代码前请先备份；SQLite 迁移只增列/表，但备份是回滚前提。
 
-详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`。
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`、`0005-p0-4-tools-approvals-sandbox-mcp.md`。
 
 
 ## 配置模型
@@ -175,6 +188,10 @@ GET|POST /api/artifacts                   GET|PUT /api/tools
 GET|POST /api/memories                    GET /api/search?q=（⌘K）
 POST /api/tasks                           GET /api/tasks/:id
 GET /api/tasks/:id/events（SSE）          GET /api/tasks/:id/evidence
+GET|POST /api/tasks/:id/messages          GET /api/approvals?status=pending
+POST /api/approvals/:id/decision          GET /api/tools/registry
+PATCH /api/tools/registry/:name/policy    GET|POST /api/mcp/connections
+GET /api/model-profiles                   GET|POST /api/service-principals
 POST /api/knowledge/search                GET /api/knowledge/bases
 GET /api/knowledge/documents/:id          GET /api/knowledge/citations/:id
 GET /api/knowledge/versions/:id           GET /api/skills

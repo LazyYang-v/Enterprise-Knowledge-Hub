@@ -1,3 +1,4 @@
+import '../helpers/sqlite-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -9,11 +10,13 @@ import { TaskWorker } from '../../server/control/worker.js';
 import { executeTask } from '../../server/control/task-executor.js';
 import {
   claimNextTask, releaseTask, getTask, transitionTaskTx, renewLease,
-  createToolCall, startToolAttempt,
+  createToolCall, startToolAttempt, startStep, appendMessage, saveCheckpoint, completeTask,
 } from '../../server/control/task-repo.js';
+import { insertEvidenceSnapshots } from '../../server/control/evidence-repo.js';
 import { getPool } from '../../server/control/pg.js';
 
 const skip = !canUseTestDatabase();
+const leaseLost = e => e.code === 'lease_lost';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function workerFor(model, options = {}){
@@ -79,15 +82,94 @@ test('P0-2 任务持久化、租约、恢复与恢复对账', { skip }, async t 
     const task = await claimNextTask({ workerId: 'w1', leaseTtlMs: 5000 });
     assert.ok(task);
     await assert.rejects(() => renewLease({
-      tenantId, taskId: task.id, workerId: 'w2', leaseTtlMs: 5000,
-    }), /租约已失效/);
+      tenantId, taskId: task.id, workerId: 'w2', leaseEpoch: task.lease_epoch, leaseTtlMs: 5000,
+    }), leaseLost);
     await assert.rejects(() => transitionTaskTx({
-      tenantId, taskId: task.id, workerId: 'w1', expectStatus: 'running', expectVersion: task.version - 1,
+      tenantId, taskId: task.id, workerId: 'w1', leaseEpoch: task.lease_epoch,
+      expectStatus: 'running', expectVersion: task.version - 1,
       to: 'failed', patch: { last_error_code: 'internal_error', lease_owner: null, lease_expires_at: null },
       eventType: 'task.failed', eventPayload: { error_code: 'internal_error' },
-    }), /租约已失效/);
-    await releaseTask({ tenantId, taskId: task.id, workerId: 'w1', expectVersion: task.version });
+    }), leaseLost);
+    await releaseTask({
+      tenantId, taskId: task.id, workerId: 'w1', leaseEpoch: task.lease_epoch, expectVersion: task.version,
+    });
     assert.equal((await getTask(tenantId, created.id)).status, 'queued');
+  });
+
+  await t.test('fencing：过期租约在回收前不能续租', async () => {
+    await cleanTasks();
+    await createTask(service, tenantId);
+    const task = await claimNextTask({ workerId: 'w-exp', leaseTtlMs: 5000 });
+    assert.ok(task);
+    await getPool().query(
+      `UPDATE agent_tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, [task.id],
+    );
+    await assert.rejects(() => renewLease({
+      tenantId, taskId: task.id, workerId: 'w-exp', leaseEpoch: task.lease_epoch, leaseTtlMs: 5000,
+    }), leaseLost);
+  });
+
+  await t.test('fencing：回收后同 Worker ID 的旧领取写入被拒绝', async () => {
+    await cleanTasks();
+    await createTask(service, tenantId);
+    const stale = await claimNextTask({ workerId: 'w-reuse', leaseTtlMs: 5000 });
+    await getPool().query(
+      `UPDATE agent_tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, [stale.id],
+    );
+    await service.reapExpired({ workerId: 'reaper' });
+    const fresh = await claimNextTask({ workerId: 'w-reuse', leaseTtlMs: 5000 });
+    assert.equal(fresh.id, stale.id);
+    assert.ok(fresh.lease_epoch > stale.lease_epoch, '重新领取必须递增 epoch');
+
+    await assert.rejects(() => appendMessage({
+      tenantId, taskId: stale.id, role: 'assistant', content: '迟到输出',
+      actorId: 'w-reuse', leaseEpoch: stale.lease_epoch,
+    }), leaseLost);
+    await assert.rejects(() => saveCheckpoint({
+      tenantId, taskId: stale.id, stepSeq: 0, state: { late: true }, leaseEpoch: stale.lease_epoch,
+    }), leaseLost);
+    await assert.rejects(() => startStep({
+      tenantId, taskId: stale.id, workerId: 'w-reuse', leaseEpoch: stale.lease_epoch,
+      expectVersion: fresh.version,
+    }), leaseLost);
+
+    await releaseTask({
+      tenantId, taskId: stale.id, workerId: 'w-reuse', leaseEpoch: fresh.lease_epoch, expectVersion: fresh.version,
+    });
+  });
+
+  await t.test('fencing：完成事务只接受当前领取的证据且只接受一次', async () => {
+    await cleanTasks();
+    const created = await createTask(service, tenantId);
+    const claimed = await claimNextTask({ workerId: 'w-done', leaseTtlMs: 5000 });
+    const { step } = await startStep({
+      tenantId, taskId: claimed.id, workerId: 'w-done', leaseEpoch: claimed.lease_epoch,
+      expectVersion: claimed.version,
+    });
+    const legacy = await insertEvidenceSnapshots({
+      tenantId, taskId: claimed.id,
+      items: [{ chunk_id: 'c-legacy', content_hash: 'a'.repeat(64), excerpt: '旧领取证据' }],
+    });
+    const completion = {
+      tenantId, taskId: claimed.id, workerId: 'w-done', leaseEpoch: claimed.lease_epoch,
+      stepId: step.id, stepSeq: Number(step.seq), summary: '完成',
+      citations: [legacy[0].row.id],
+      checkpointState: { finished: true },
+    };
+    await assert.rejects(() => completeTask(completion), e => e.code === 'evidence_conflict');
+    assert.equal((await getTaskRow(tenantId, created.id)).status, 'running', '证据校验失败必须回滚');
+
+    const bound = await insertEvidenceSnapshots({
+      tenantId, taskId: claimed.id, leaseEpoch: claimed.lease_epoch,
+      items: [{ chunk_id: 'c-bound', content_hash: 'b'.repeat(64), excerpt: '当前领取证据' }],
+    });
+    const done = await completeTask({ ...completion, citations: [bound[0].row.id] });
+    assert.equal(done.status, 'completed');
+    const completedEvents = (await getEvents(tenantId, created.id)).filter(e => e.type === 'task.completed');
+    assert.equal(completedEvents.length, 1);
+    await assert.rejects(() => completeTask({ ...completion, citations: [bound[0].row.id] }), leaseLost);
+    const eventsAfter = (await getEvents(tenantId, created.id)).filter(e => e.type === 'task.completed');
+    assert.equal(eventsAfter.length, 1, '重复完成不能追加第二个完成事件');
   });
 
   await t.test('plan → finish：任务完成且事件序号连续', async () => {
@@ -208,7 +290,8 @@ test('P0-2 任务持久化、租约、恢复与恢复对账', { skip }, async t 
     // 模拟 Worker 在 Step 开始时被杀
     const { startStep } = await import('../../server/control/task-repo.js');
     const started = await startStep({
-      tenantId, taskId: created.id, workerId: 'dead', expectVersion: claimed.version,
+      tenantId, taskId: created.id, workerId: 'dead', leaseEpoch: claimed.lease_epoch,
+      expectVersion: claimed.version,
     });
     await getPool().query(
       `UPDATE agent_tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, [created.id],
@@ -246,7 +329,7 @@ test('P0-2 任务持久化、租约、恢复与恢复对账', { skip }, async t 
       tenantId, taskId: created.id, toolName: 'crm.create', args: { name: 'x' },
       argsHash: 'a'.repeat(64), sideEffect: 'write_business', idempotencyKey: null, status: 'running',
     });
-    await startToolAttempt({ tenantId, toolCallId: call.id, attemptNo: 1, workerId: 'dead-write', leaseEpoch: claimed.version });
+    await startToolAttempt({ tenantId, toolCallId: call.id, attemptNo: 1, workerId: 'dead-write', leaseEpoch: claimed.lease_epoch });
     await getPool().query(
       `UPDATE agent_tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, [created.id],
     );

@@ -1,6 +1,7 @@
 // R-01 / P0-2 门禁：20 次 kill -9 Worker 后，租约回收并完成任务，且不重复已完成 Step。
 process.env.AGENT_PLATFORM_ENABLED = '1';
 
+import '../helpers/sqlite-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

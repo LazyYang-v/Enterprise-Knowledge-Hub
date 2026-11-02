@@ -1,0 +1,86 @@
+{
+  "phase": "P0-4",
+  "purpose": "确定性验证工具契约、策略默认拒绝、一次性审批、沙箱边界与越权；不做模型级评分（P0-6）。",
+  "cases": [
+    {
+      "id": "TOOL-01",
+      "kind": "normal",
+      "title": "内置只读工具允许执行",
+      "tool": "knowledge.search",
+      "expect": {
+        "decision": "allow",
+        "persisted_tool_call": true,
+        "events": ["tool.requested", "tool.started", "tool.completed"]
+      }
+    },
+    {
+      "id": "TOOL-02",
+      "kind": "normal",
+      "title": "高风险自定义工具暂停等待审批",
+      "tool": "custom.<id>",
+      "expect": {
+        "task_status": "waiting_approval",
+        "tool_call_status": "awaiting_approval",
+        "attempts_before_approval": 0
+      }
+    },
+    {
+      "id": "TOOL-03",
+      "kind": "boundary",
+      "title": "审批绑定参数哈希",
+      "approval_args_hash_matches": false,
+      "expect": { "error": "approval_args_mismatch", "executed": false }
+    },
+    {
+      "id": "TOOL-04",
+      "kind": "boundary",
+      "title": "审批一次性消费",
+      "expect": {
+        "attempts_after_resume": 1,
+        "replay_rejected": true,
+        "approval_consumed_at": "set"
+      }
+    },
+    {
+      "id": "TOOL-05",
+      "kind": "failure",
+      "title": "沙箱禁止宿主能力",
+      "tool_code": "execute(){ return String(fetch('http://127.0.0.1:9')) }",
+      "expect": { "error": "sandbox_violation", "leak": false }
+    },
+    {
+      "id": "TOOL-06",
+      "kind": "failure",
+      "title": "跨用户自定义工具不可见/不可绑/不可执行",
+      "expect": { "list_visible": false, "bind_status": 403, "execute_status": 403 }
+    },
+    {
+      "id": "TOOL-07",
+      "kind": "failure",
+      "title": "策略默认拒绝",
+      "policy": { "enabled": false },
+      "expect": { "tool_call_status": "failed", "error_code": "policy_denied", "executed": false }
+    },
+    {
+      "id": "TOOL-08",
+      "kind": "failure",
+      "title": "任务预算耗尽",
+      "budget": { "max_tool_calls": 1, "usage_tool_calls": 1 },
+      "expect": { "task_status": "failed", "error_code": "budget_exhausted" }
+    },
+    {
+      "id": "TOOL-09",
+      "kind": "failure",
+      "title": "服务主体越权知识库",
+      "principal_scopes": { "kb_ids": ["kb-allowed"] },
+      "request_kb_ids": ["kb-denied"],
+      "expect": { "http_status": 403 }
+    },
+    {
+      "id": "TOOL-10",
+      "kind": "failure",
+      "title": "模型凭证不回显",
+      "expect": { "credential_ref_visible": false, "secret_in_response": false }
+    }
+  ]
+}

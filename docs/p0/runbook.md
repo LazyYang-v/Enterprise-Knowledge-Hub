@@ -1,4 +1,4 @@
-# P0 运行手册（P0-0 … P0-3）
+# P0 运行手册（P0-0 … P0-4）
 
 ## 1. 前置条件
 
@@ -196,7 +196,7 @@ curl -s -X POST http://localhost:3210/api/skills/reload \
 | `AGENT_PLATFORM_ENABLED` | `0` | 启用 `/api/tasks` 与 `/api/approvals`（P0-2） |
 | `EKH_ENABLE_DEMO_SEED` | `1` | 非生产环境是否初始化演示数据；生产忽略 |
 | `EKH_SERVICE_TOKEN` | 空 | MCP/检索服务令牌；为空时在 `data/service-token` 生成 |
-| `PLATFORM_ADMIN_EMAILS` | 空 | 平台管理员邮箱（Skill reload 等） |
+| `PLATFORM_ADMIN_EMAILS` | 空 | 平台管理员邮箱（Skill reload、模型/MCP/服务主体/内置工具管理） |
 | `EKH_AGENT_MODEL_BASE_URL` | 空 | Worker 使用的 OpenAI 兼容地址 |
 | `EKH_AGENT_MODEL_NAME` | 空 | Worker 模型 ID |
 | `EKH_AGENT_MODEL_API_KEY` | 空 | Worker 模型密钥（仅环境变量，不入库） |
@@ -211,7 +211,54 @@ curl -s -X POST http://localhost:3210/api/skills/reload \
 
 `.env` 不会被自动加载；可使用 `node --env-file=.env server/index.js`，或直接导出环境变量。
 
-## 10. CI
+## 10. 工具、审批、沙箱、MCP 与服务身份（P0-4）
+
+### 工具快照与审批
+
+创建任务时用 `tools` 固定工具清单（不传则默认 4 个只读 `knowledge.*`）：
+
+```bash
+curl -s -X POST http://localhost:3210/api/tasks \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"goal":"计算 1+2","tools":["custom:<tool_id>"]}'
+```
+
+自定义工具与高风险副作用（`code_exec/external_send/write_business/destructive`）会进入 `waiting_approval`。审批必须由任务所有者/管理员完成，并提交快照中的 `args_hash`；批准后 Worker 只执行一次。
+
+```bash
+curl -s http://localhost:3210/api/tasks/<task_id> -H "Authorization: Bearer $TOKEN"   # pending.approval
+curl -s -X POST http://localhost:3210/api/approvals/<approval_id>/decision \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"decision":"approve","args_hash":"<snapshot args_hash>"}'
+```
+
+前端路径：侧边栏「任务」→ 新建任务 → 打开任务详情。待审批卡片展示工具名、副作用、真实调用参数（`agent_tool_calls.args_json`）、参数哈希与过期时间；批准/拒绝后任务重新入队或取消。事件时间线通过 SSE 实时更新；右侧显示计划、工具快照、证据与用量。系统设置 →「Agent 平台」提供工具注册表策略、MCP 连接、平台模型与服务主体（按管理员权限显示）。注意：任务需要另开终端运行 `npm run worker` 才会被执行。
+
+### 沙箱
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `EKH_TOOL_SANDBOX_MODE` | `process` | `process` / `required` / `off`；生产建议 `required` |
+| `EKH_TOOL_TIMEOUT_MS` | `15000` | 子进程执行超时 |
+| `EKH_TOOL_MAX_OUTPUT_CHARS` | `8000` | 回传模型的结果上限 |
+| `EKH_TOOL_SANDBOX_MEMORY_MB` | `256` | 子进程堆上限 |
+| `EKH_TOOL_APPROVAL_TTL_MS` | `86400000` | 普通审批有效期 |
+| `EKH_TOOL_HIGH_RISK_APPROVAL_TTL_MS` | `3600000` | 高风险审批有效期 |
+| `EKH_TOOL_CATALOG_MAX_CHARS` | `12000` | 工具目录注入系统提示词上限 |
+| `EKH_TOOL_MAX_PER_TASK` | `20` | 任务快照工具数量上限 |
+| `EKH_MCP_CLIENT_TIMEOUT_MS` | `15000` | 出站 MCP 超时 |
+| `EKH_MODEL_SECRET_DIR` | 空 | `file:` 凭证根目录，必须在其中 |
+| `EKH_SERVICE_LEGACY_TOKEN_ENABLED` | `1` | 是否兼容旧全局服务令牌；生产建议 `0` |
+
+沙箱只使用 Node 权限模型阻断文件读取；网络命名空间/容器隔离留 P0-6，不要把自定义工具当作强隔离边界。
+
+### MCP、模型 profile、服务主体
+
+- `POST /api/mcp/connections`：Streamable HTTP 连接；`credential_ref` 只存引用，刷新后写入工具缓存与注册表。
+- `POST /api/model-profiles`：PlatformAdmin；`credential_ref` 支持 `env:NAME` / `file:<相对路径>`；`base_url` 拒绝私网与元数据地址。
+- `POST /api/service-principals`：返回明文 token **仅一次**；`scopes` 形如 `{"kb_ids":["kb-a"],"tools":["search_knowledge"]}`；`DELETE` 吊销，`/rotate` 轮换。
+
+## 11. CI
 
 `.github/workflows/ci.yml`：
 
@@ -220,7 +267,7 @@ curl -s -X POST http://localhost:3210/api/skills/reload \
 
 基线脚本不作为门禁。
 
-## 11. 常见问题
+## 12. 常见问题
 
 | 问题 | 处理 |
 |---|---|

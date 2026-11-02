@@ -234,7 +234,7 @@ router.post('/sessions/:id/chat', async (req, res) => {
     }
 
     // 工具箱上传的自定义工具：以 function calling 形式提供给模型
-    const customTools = agent ? resolveAgentCustomTools(agentTools) : [];
+    const customTools = agent ? resolveAgentCustomTools(agentTools, { ownerId: req.user.id }) : [];
     const openaiTools = customTools.map(t => {
       let params;
       try { params = JSON.parse(t.parameters || '{}'); } catch { params = { type: 'object', properties: {} }; }

@@ -50,6 +50,30 @@ test('SQLite 迁移只增列/表并回填，第二次执行幂等', () => {
   db.close();
 });
 
+test('v2 自定义工具版本：回填版本 1、代码哈希与幂等', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ekh-tools-')), 'legacy.db');
+  const db = legacyDb(file);
+  db.exec(`
+    INSERT INTO custom_tools(id, owner_id, name, description, parameters, code, enabled, created_at, updated_at)
+    VALUES ('t1', 'u1', '加法', '计算和', '{"type":"object"}', 'export default { execute: () => "1" }', 1, 5, 5);
+  `);
+  assert.equal(SQLITE_SCHEMA_VERSION, 2);
+  assert.equal(runSqliteMigrations(db), 2);
+  const tool = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get('t1');
+  assert.equal(tool.current_version, 1);
+  assert.match(tool.code_hash, /^[0-9a-f]{64}$/);
+  assert.equal(tool.deleted_at, null);
+  const version = db.prepare('SELECT * FROM custom_tool_versions WHERE tool_id = ? AND version = 1').get('t1');
+  assert.equal(version.code_hash, tool.code_hash);
+  assert.equal(version.name, '加法');
+  assert.equal(JSON.parse(version.parameters).type, 'object');
+
+  // 再次执行不重复插入版本。
+  assert.equal(runSqliteMigrations(db), 2);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM custom_tool_versions WHERE tool_id = ?').get('t1').c, 1);
+  db.close();
+});
+
 test('迁移失败回滚且不推进 user_version', () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ekh-legacy-bad-')), 'legacy.db');
   const db = legacyDb(file);

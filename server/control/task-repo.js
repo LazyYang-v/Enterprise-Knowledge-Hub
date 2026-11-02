@@ -27,6 +27,14 @@ export class TaskNotFoundError extends Error {
   }
 }
 
+export class EvidenceClaimError extends Error {
+  constructor(message = '引用不属于当前领取'){
+    super(message);
+    this.name = 'EvidenceClaimError';
+    this.code = 'evidence_conflict';
+  }
+}
+
 const PATCH_JSON_FIELDS = new Set(['usage_json', 'budget_json', 'input_json']);
 /** 让 ready_at 使用数据库时间，避免 Worker/客户端时钟偏差导致任务不可领取。 */
 export const SQL_NOW = Symbol('sql_now');
@@ -44,6 +52,7 @@ export function toTask(row){
     ...row,
     event_seq: Number(row.event_seq),
     version: Number(row.version),
+    lease_epoch: Number(row.lease_epoch ?? 0),
     attempt_count: Number(row.attempt_count),
     max_attempts: Number(row.max_attempts),
     resume_count: Number(row.resume_count),
@@ -155,6 +164,7 @@ export async function claimNextTask({ workerId, leaseTtlMs }){
       `UPDATE agent_tasks
           SET status = 'running',
               lease_owner = $2,
+              lease_epoch = lease_epoch + 1,
               lease_expires_at = now() + ($3::numeric * interval '1 millisecond'),
               heartbeat_at = now(),
               attempt_count = attempt_count + 1,
@@ -168,7 +178,7 @@ export async function claimNextTask({ workerId, leaseTtlMs }){
     const task = toTask(updated.rows[0]);
     await appendEvent(client, {
       tenantId: task.tenant_id, taskId: task.id, type: 'task.started', actorType: 'worker', actorId: workerId,
-      payload: { worker_id: workerId, attempt: task.attempt_count },
+      payload: { worker_id: workerId, attempt: task.attempt_count, lease_epoch: task.lease_epoch },
     });
     task.event_seq += 1;
     return task;
@@ -176,26 +186,31 @@ export async function claimNextTask({ workerId, leaseTtlMs }){
 }
 
 /**
- * 续租：只以 lease_owner + status 作为护栏。
- * 状态写入仍必须带 version；续租不改变 version，避免与 Step 迁移竞争导致误判失租。
+ * 续租：要求当前所有者、领取标识，且租约尚未到期。
+ * 续租不改变 version，避免与 Step 迁移竞争导致误判失租。
  */
-export async function renewLease({ tenantId, taskId, workerId, leaseTtlMs }){
+export async function renewLease({ tenantId, taskId, workerId, leaseEpoch, leaseTtlMs }){
   const r = await getPool().query(
     `UPDATE agent_tasks
-        SET lease_expires_at = now() + ($4::numeric * interval '1 millisecond'),
+        SET lease_expires_at = now() + ($5::numeric * interval '1 millisecond'),
             heartbeat_at = now(), updated_at = now()
-      WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND status = 'running'
-      RETURNING lease_expires_at, version`,
-    [tenantId, taskId, workerId, leaseTtlMs],
+      WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+        AND status = 'running' AND lease_expires_at > now()
+      RETURNING lease_expires_at, version, lease_epoch`,
+    [tenantId, taskId, workerId, leaseEpoch, leaseTtlMs],
   );
   if (!r.rowCount) throw new LeaseLostError();
-  return { lease_expires_at: r.rows[0].lease_expires_at, version: Number(r.rows[0].version) };
+  return {
+    lease_expires_at: r.rows[0].lease_expires_at,
+    version: Number(r.rows[0].version),
+    lease_epoch: Number(r.rows[0].lease_epoch),
+  };
 }
 
 /** 主动释放任务回队列（优雅停机/中止）。 */
-export async function releaseTask({ tenantId, taskId, workerId, expectVersion, reason = 'worker_shutdown' }){
+export async function releaseTask({ tenantId, taskId, workerId, leaseEpoch, expectVersion, reason = 'worker_shutdown' }){
   return withTransaction(client => transitionTask(client, {
-    tenantId, taskId, workerId,
+    tenantId, taskId, workerId, leaseEpoch,
     expectStatus: 'running', expectVersion,
     to: 'queued',
     patch: { ready_at: SQL_NOW, lease_owner: null, lease_expires_at: null },
@@ -209,7 +224,7 @@ export async function releaseTask({ tenantId, taskId, workerId, expectVersion, r
  * 影响行数为 0 时抛出 LeaseLostError（Worker 写入）或 TaskConflictError。
  */
 export async function transitionTask(client, {
-  tenantId, taskId, expectStatus = 'running', expectVersion, workerId = null,
+  tenantId, taskId, expectStatus = 'running', expectVersion, workerId = null, leaseEpoch = null,
   to, patch = {}, eventType = null, eventPayload = {}, actorType = 'worker', actorId = null,
 }){
   const sets = ['status = $1', 'version = version + 1', 'updated_at = now()'];
@@ -234,6 +249,10 @@ export async function transitionTask(client, {
     params.push(workerId);
     where += ` AND lease_owner = $${params.length}`;
   }
+  if (workerId && leaseEpoch != null){
+    params.push(leaseEpoch);
+    where += ` AND lease_epoch = $${params.length} AND lease_expires_at > now()`;
+  }
   const r = await client.query(
     `UPDATE agent_tasks SET ${sets.join(', ')} WHERE ${where} RETURNING *`,
     params,
@@ -255,21 +274,23 @@ export async function transitionTaskTx(args){
   return withTransaction(client => transitionTask(client, args));
 }
 
-export async function startStep({ tenantId, taskId, workerId, expectVersion, kind = 'model_turn' }){
+export async function startStep({ tenantId, taskId, workerId, leaseEpoch, expectVersion, kind = 'model_turn' }){
   return withTransaction(async client => {
     const current = await client.query(
       `SELECT current_step_seq FROM agent_tasks
-        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND version = $4 AND status = 'running'
+        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+          AND version = $5 AND status = 'running' AND lease_expires_at > now()
         FOR UPDATE`,
-      [tenantId, taskId, workerId, expectVersion],
+      [tenantId, taskId, workerId, leaseEpoch, expectVersion],
     );
     if (!current.rowCount) throw new LeaseLostError();
     const seq = Number(current.rows[0].current_step_seq) + 1;
     const updated = await client.query(
-      `UPDATE agent_tasks SET current_step_seq = $5, version = version + 1, updated_at = now()
-        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND version = $4 AND status = 'running'
+      `UPDATE agent_tasks SET current_step_seq = $6, version = version + 1, updated_at = now()
+        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+          AND version = $5 AND status = 'running' AND lease_expires_at > now()
         RETURNING *`,
-      [tenantId, taskId, workerId, expectVersion, seq],
+      [tenantId, taskId, workerId, leaseEpoch, expectVersion, seq],
     );
     if (!updated.rowCount) throw new LeaseLostError();
     const step = await client.query(
@@ -286,23 +307,30 @@ export async function startStep({ tenantId, taskId, workerId, expectVersion, kin
   });
 }
 
-export async function finishStep({ tenantId, taskId, stepId, workerId = null, status = 'completed', errorCode = null, inputTokens = 0, outputTokens = 0 }){
+export async function finishStep({
+  tenantId, taskId, stepId, workerId = null, leaseEpoch = null,
+  status = 'completed', errorCode = null, inputTokens = 0, outputTokens = 0,
+}){
+  if (workerId && leaseEpoch == null) throw new TypeError('Worker 写入必须提供 leaseEpoch');
   await withTransaction(async client => {
     const params = [tenantId, stepId, status, errorCode, inputTokens, outputTokens];
-    let where = 'tenant_id = $1 AND id = $2';
+    let where = 'tenant_id = $1 AND id = $2 AND status = \'running\'';
     if (workerId){
       params.push(taskId, workerId);
-      where += ` AND EXISTS (
+      where += ` AND task_id = $7 AND EXISTS (
         SELECT 1 FROM agent_tasks t
-         WHERE t.tenant_id = $1 AND t.id = $7 AND t.lease_owner = $8 AND t.status IN ('running', 'cancel_requested')
+         WHERE t.tenant_id = $1 AND t.id = $7 AND t.lease_owner = $8
+           AND t.lease_epoch = $9 AND t.status IN ('running', 'cancel_requested')
+           AND t.lease_expires_at > now()
       )`;
+      params.push(leaseEpoch);
     }
     const updated = await client.query(
       `UPDATE agent_steps SET status = $3, error_code = $4, input_tokens = $5, output_tokens = $6, ended_at = now()
         WHERE ${where} RETURNING task_id, seq`,
       params,
     );
-    if (!updated.rowCount) return; // 租约已失效：旧 Worker 不得再写
+    if (!updated.rowCount) throw new LeaseLostError('步骤已完成或租约已失效');
     await appendEvent(client, {
       tenantId, taskId, type: 'step.completed', actorType: 'worker', actorId: workerId,
       payload: { step_seq: Number(updated.rows[0].seq), status, error_code: errorCode },
@@ -310,21 +338,91 @@ export async function finishStep({ tenantId, taskId, stepId, workerId = null, st
   });
 }
 
-export async function recordPlan({ tenantId, taskId, workerId, expectVersion, items }){
+/**
+ * 原子完成：同一事务内校验本领取的证据、完成 Step、写检查点、完成任务并追加事件。
+ * 任一校验失败时整个事务回滚，不留下部分完成状态。
+ */
+export async function completeTask({
+  tenantId, taskId, workerId, leaseEpoch, stepId, stepSeq,
+  summary, citations = [], evidenceIds = [], artifactIds = [], usage = {}, checkpointState = null,
+}){
+  return withTransaction(async client => {
+    const owned = await client.query(
+      `SELECT id FROM agent_tasks
+        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+          AND status = 'running' AND lease_expires_at > now()
+        FOR UPDATE`,
+      [tenantId, taskId, workerId, leaseEpoch],
+    );
+    if (!owned.rowCount) throw new LeaseLostError('租约已失效：完成写入不属于当前领取');
+
+    const cited = [...new Set((citations || []).map(String))];
+    if (cited.length){
+      const rows = await client.query(
+        `SELECT id FROM agent_evidence
+          WHERE tenant_id = $1 AND task_id = $2 AND lease_epoch = $3 AND id = ANY($4::uuid[])`,
+        [tenantId, taskId, leaseEpoch, cited],
+      );
+      if (rows.rowCount !== cited.length) throw new EvidenceClaimError();
+    }
+
+    const step = await client.query(
+      `UPDATE agent_steps SET status = 'completed', ended_at = now()
+        WHERE tenant_id = $1 AND task_id = $2 AND id = $3 AND status = 'running'
+        RETURNING seq`,
+      [tenantId, taskId, stepId],
+    );
+    if (!step.rowCount) throw new LeaseLostError('租约已失效：步骤已完成或不属于当前领取');
+
+    if (checkpointState){
+      const stateJson = JSON.stringify(checkpointState);
+      const hash = crypto.createHash('sha256').update(stateJson).digest('hex');
+      await client.query(
+        `INSERT INTO agent_checkpoints (tenant_id, task_id, step_seq, state_json, state_hash)
+         VALUES ($1, $2, $3, $4::jsonb, $5)
+         ON CONFLICT (task_id, step_seq) DO UPDATE SET state_json = EXCLUDED.state_json, state_hash = EXCLUDED.state_hash, created_at = now()`,
+        [tenantId, taskId, stepSeq, stateJson, hash],
+      );
+    }
+
+    const updated = await client.query(
+      `UPDATE agent_tasks
+          SET status = 'completed', result_summary = $5, usage_json = $6::jsonb,
+              current_step_seq = $7, lease_owner = NULL, lease_expires_at = NULL,
+              version = version + 1, updated_at = now()
+        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+          AND status = 'running'
+        RETURNING *`,
+      [tenantId, taskId, workerId, leaseEpoch, summary, JSON.stringify(usage), stepSeq],
+    );
+    if (!updated.rowCount) throw new LeaseLostError();
+    const task = toTask(updated.rows[0]);
+    task.event_seq = await appendEvent(client, {
+      tenantId, taskId, type: 'task.completed',
+      payload: { summary, artifact_ids: artifactIds, citations: cited, evidence_ids: evidenceIds },
+      actorType: 'model',
+    });
+    return task;
+  });
+}
+
+export async function recordPlan({ tenantId, taskId, workerId, leaseEpoch, expectVersion, items }){
   return withTransaction(async client => {
     const current = await client.query(
       `SELECT plan_version FROM agent_tasks
-        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND version = $4 AND status = 'running'
+        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+          AND version = $5 AND status = 'running' AND lease_expires_at > now()
         FOR UPDATE`,
-      [tenantId, taskId, workerId, expectVersion],
+      [tenantId, taskId, workerId, leaseEpoch, expectVersion],
     );
     if (!current.rowCount) throw new LeaseLostError();
     const version = Number(current.rows[0].plan_version) + 1;
     const updated = await client.query(
-      `UPDATE agent_tasks SET plan_version = $5, version = version + 1, updated_at = now()
-        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND version = $4 AND status = 'running'
+      `UPDATE agent_tasks SET plan_version = $6, version = version + 1, updated_at = now()
+        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3 AND lease_epoch = $4
+          AND version = $5 AND status = 'running' AND lease_expires_at > now()
         RETURNING *`,
-      [tenantId, taskId, workerId, expectVersion, version],
+      [tenantId, taskId, workerId, leaseEpoch, expectVersion, version],
     );
     if (!updated.rowCount) throw new LeaseLostError();
     for (const item of items){
@@ -358,9 +456,21 @@ export async function listPlanItems(tenantId, taskId, planVersion = null){
   return r.rows.filter(row => Number(row.plan_version) === latest);
 }
 
-export async function appendMessage({ tenantId, taskId, role, content, contentJson = null, actorId = null }){
+export async function appendMessage({
+  tenantId, taskId, role, content, contentJson = null, actorId = null, leaseEpoch = null,
+}){
   return withTransaction(async client => {
-    await client.query('SELECT id FROM agent_tasks WHERE tenant_id = $1 AND id = $2 FOR UPDATE', [tenantId, taskId]);
+    if (leaseEpoch != null){
+      const owned = await client.query(
+        `SELECT id FROM agent_tasks
+          WHERE tenant_id = $1 AND id = $2 AND lease_epoch = $3
+            AND status IN ('running', 'cancel_requested') AND lease_expires_at > now() FOR UPDATE`,
+        [tenantId, taskId, leaseEpoch],
+      );
+      if (!owned.rowCount) throw new LeaseLostError('租约已失效：消息写入不属于当前领取');
+    } else {
+      await client.query('SELECT id FROM agent_tasks WHERE tenant_id = $1 AND id = $2 FOR UPDATE', [tenantId, taskId]);
+    }
     const seqRow = await client.query(
       'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM agent_messages WHERE tenant_id = $1 AND task_id = $2',
       [tenantId, taskId],
@@ -377,7 +487,7 @@ export async function appendMessage({ tenantId, taskId, role, content, contentJs
 
 export async function listMessages(tenantId, taskId, limit = 40){
   const r = await getPool().query(
-    `SELECT role, content FROM agent_messages
+    `SELECT seq, role, content, created_at FROM agent_messages
       WHERE tenant_id = $1 AND task_id = $2
       ORDER BY seq DESC LIMIT $3`,
     [tenantId, taskId, limit],
@@ -385,16 +495,28 @@ export async function listMessages(tenantId, taskId, limit = 40){
   return r.rows.reverse();
 }
 
-export async function saveCheckpoint({ tenantId, taskId, stepSeq, state }){
+export async function saveCheckpoint({ tenantId, taskId, stepSeq, state, leaseEpoch = null }){
   const stateJson = JSON.stringify(state);
   const hash = crypto.createHash('sha256').update(stateJson).digest('hex');
-  await getPool().query(
-    `INSERT INTO agent_checkpoints (tenant_id, task_id, step_seq, state_json, state_hash)
-     VALUES ($1, $2, $3, $4::jsonb, $5)
-     ON CONFLICT (task_id, step_seq) DO UPDATE SET state_json = EXCLUDED.state_json, state_hash = EXCLUDED.state_hash, created_at = now()`,
-    [tenantId, taskId, stepSeq, stateJson, hash],
-  );
-  return hash;
+  return withTransaction(async client => {
+    if (leaseEpoch != null){
+      const owned = await client.query(
+        `SELECT 1 FROM agent_tasks
+          WHERE tenant_id = $1 AND id = $2 AND lease_epoch = $3
+            AND status IN ('running', 'cancel_requested', 'waiting_input', 'waiting_approval')
+            AND (status IN ('waiting_input', 'waiting_approval') OR lease_expires_at > now())`,
+        [tenantId, taskId, leaseEpoch],
+      );
+      if (!owned.rowCount) throw new LeaseLostError('租约已失效：检查点写入不属于当前领取');
+    }
+    await client.query(
+      `INSERT INTO agent_checkpoints (tenant_id, task_id, step_seq, state_json, state_hash)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       ON CONFLICT (task_id, step_seq) DO UPDATE SET state_json = EXCLUDED.state_json, state_hash = EXCLUDED.state_hash, created_at = now()`,
+      [tenantId, taskId, stepSeq, stateJson, hash],
+    );
+    return hash;
+  });
 }
 
 export async function getLatestCheckpoint(tenantId, taskId){
@@ -469,19 +591,32 @@ export async function getApproval(tenantId, approvalId){
 }
 
 // —— 工具调用（P0-2 提供持久化与恢复查询；执行器在 P0-4 接入） ——
-export async function createToolCall({ tenantId, taskId, stepId = null, toolName, toolVersion = '', source = 'builtin', args = {}, argsHash, sideEffect = 'read', idempotencyKey = null, status = 'proposed' }){
+export async function createToolCall({ tenantId, taskId, stepId = null, toolName, toolVersion = '', source = 'builtin', args = {}, argsHash, sideEffect = 'read', idempotencyKey = null, status = 'proposed', codeHash = '' }){
   const r = await getPool().query(
     `INSERT INTO agent_tool_calls
-       (tenant_id, task_id, step_id, tool_name, tool_version, source, args_json, args_hash, side_effect, idempotency_key, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11) RETURNING *`,
-    [tenantId, taskId, stepId, toolName, toolVersion, source, JSON.stringify(args), argsHash, sideEffect, idempotencyKey, status],
+       (tenant_id, task_id, step_id, tool_name, tool_version, source, args_json, args_hash, side_effect, idempotency_key, status, code_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12) RETURNING *`,
+    [tenantId, taskId, stepId, toolName, toolVersion, source, JSON.stringify(args), argsHash, sideEffect, idempotencyKey, status, codeHash],
   );
   return r.rows[0];
 }
 
 export async function startToolAttempt({ tenantId, toolCallId, attemptNo, workerId, leaseEpoch }){
+  if (!workerId || leaseEpoch == null) throw new TypeError('Worker 写入必须提供 leaseEpoch');
   return withTransaction(async client => {
-    await client.query('UPDATE agent_tool_calls SET status = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2', [tenantId, toolCallId, 'running']);
+    const owned = await client.query(
+      `UPDATE agent_tool_calls c SET status = 'running', updated_at = now()
+         FROM agent_tasks t
+        WHERE c.tenant_id = $1 AND c.id = $2
+          AND t.tenant_id = c.tenant_id AND t.id = c.task_id
+          AND t.lease_owner = $3 AND t.lease_epoch = $4
+          AND t.status IN ('running', 'cancel_requested')
+          AND t.lease_expires_at > now()
+          AND c.status IN ('proposed', 'running')
+        RETURNING c.task_id`,
+      [tenantId, toolCallId, workerId, leaseEpoch],
+    );
+    if (!owned.rowCount) throw new LeaseLostError('租约已失效：工具调用不属于当前领取');
     const r = await client.query(
       `INSERT INTO agent_tool_attempts (tenant_id, tool_call_id, attempt_no, worker_id, lease_epoch, status)
        VALUES ($1, $2, $3, $4, $5, 'running') RETURNING *`,
@@ -491,7 +626,32 @@ export async function startToolAttempt({ tenantId, toolCallId, attemptNo, worker
   });
 }
 
-export async function finishToolAttempt({ tenantId, attemptId, status, errorCode = null, resultHash = null }){
+/**
+ * 结束一次工具尝试。传入 workerId/leaseEpoch 时必须仍持有有效领取，
+ * 迟到的旧 Worker 写入会被拒绝（LeaseLostError），不能覆盖新领取的结果。
+ */
+export async function finishToolAttempt({
+  tenantId, attemptId, status, errorCode = null, resultHash = null,
+  workerId = null, leaseEpoch = null,
+}){
+  if (workerId && leaseEpoch == null) throw new TypeError('Worker 写入必须提供 leaseEpoch');
+  if (workerId){
+    const r = await getPool().query(
+      `UPDATE agent_tool_attempts a
+          SET status = $3, error_code = $4, result_hash = $5, ended_at = now()
+         FROM agent_tool_calls c, agent_tasks t
+        WHERE a.tenant_id = $1 AND a.id = $2 AND a.status = 'running'
+          AND a.worker_id = $6 AND a.lease_epoch = $7
+          AND c.tenant_id = a.tenant_id AND c.id = a.tool_call_id
+          AND t.tenant_id = c.tenant_id AND t.id = c.task_id
+          AND t.lease_owner = $6 AND t.lease_epoch = $7
+          AND t.lease_expires_at > now()
+        RETURNING a.id`,
+      [tenantId, attemptId, status, errorCode, resultHash, workerId, leaseEpoch],
+    );
+    if (!r.rowCount) throw new LeaseLostError('租约已失效：工具尝试不属于当前领取');
+    return;
+  }
   await getPool().query(
     `UPDATE agent_tool_attempts SET status = $3, error_code = $4, result_hash = $5, ended_at = now()
       WHERE tenant_id = $1 AND id = $2`,
@@ -499,12 +659,120 @@ export async function finishToolAttempt({ tenantId, attemptId, status, errorCode
   );
 }
 
-export async function finishToolCall({ tenantId, toolCallId, status, errorCode = null, resultPreview = null }){
+/**
+ * 结束工具调用。传入 workerId/leaseEpoch 时同样要求当前领取有效，
+ * 避免失去租约的 Worker 把旧调用标记为成功。
+ */
+export async function finishToolCall({
+  tenantId, toolCallId, status, errorCode = null, resultPreview = null, resultHash = null,
+  workerId = null, leaseEpoch = null, attemptId = null,
+}){
+  if (workerId && leaseEpoch == null) throw new TypeError('Worker 写入必须提供 leaseEpoch');
+  const setSql = `SET status = $3, error_code = $4, result_preview = $5, result_hash = $6, updated_at = now()`;
+  if (workerId){
+    const r = await getPool().query(
+      `UPDATE agent_tool_calls c ${setSql}
+         FROM agent_tasks t
+        WHERE c.tenant_id = $1 AND c.id = $2
+          AND t.tenant_id = c.tenant_id AND t.id = c.task_id
+          AND t.lease_owner = $7 AND t.lease_epoch = $8
+          AND t.lease_expires_at > now()
+          AND ($9::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM agent_tool_attempts a
+             WHERE a.tenant_id = c.tenant_id AND a.id = $9
+               AND a.tool_call_id = c.id
+               AND a.worker_id = $7 AND a.lease_epoch = $8
+          ))
+        RETURNING c.id`,
+      [tenantId, toolCallId, status, errorCode, resultPreview, resultHash || '', workerId, leaseEpoch, attemptId],
+    );
+    if (!r.rowCount) throw new LeaseLostError('租约已失效：工具调用不属于当前领取');
+    return;
+  }
   await getPool().query(
-    `UPDATE agent_tool_calls SET status = $3, error_code = $4, result_preview = $5, updated_at = now()
-      WHERE tenant_id = $1 AND id = $2`,
-    [tenantId, toolCallId, status, errorCode, resultPreview],
+    `UPDATE agent_tool_calls c ${setSql}
+      WHERE c.tenant_id = $1 AND c.id = $2`,
+    [tenantId, toolCallId, status, errorCode, resultPreview, resultHash || ''],
   );
+}
+
+export async function getToolCall(tenantId, toolCallId){
+  const r = await getPool().query(
+    'SELECT * FROM agent_tool_calls WHERE tenant_id = $1 AND id = $2',
+    [tenantId, toolCallId],
+  );
+  return r.rows[0] || null;
+}
+
+export async function countToolCalls({ tenantId, taskId, toolName = null }){
+  const params = [tenantId, taskId];
+  let where = 'tenant_id = $1 AND task_id = $2';
+  if (toolName){ params.push(toolName); where += ' AND tool_name = $3'; }
+  const r = await getPool().query(`SELECT COUNT(*)::int AS n FROM agent_tool_calls WHERE ${where}`, params);
+  return r.rows[0]?.n || 0;
+}
+
+export async function listToolCalls({ tenantId, taskId, limit = 100 }){
+  const r = await getPool().query(
+    `SELECT * FROM agent_tool_calls WHERE tenant_id = $1 AND task_id = $2
+      ORDER BY created_at ASC LIMIT $3`,
+    [tenantId, taskId, Math.min(Math.max(Number(limit) || 100, 1), 500)],
+  );
+  return r.rows;
+}
+
+export async function markToolCallReconciled({ tenantId, toolCallId, note = null }){
+  const r = await getPool().query(
+    `UPDATE agent_tool_calls
+        SET status = 'reconciled', error_code = NULL, result_preview = $3, updated_at = now()
+      WHERE tenant_id = $1 AND id = $2 RETURNING *`,
+    [tenantId, toolCallId, note],
+  );
+  return r.rows[0] || null;
+}
+
+/** 待处理审批：任务快照与审批 API 使用。 */
+export async function getPendingApproval(tenantId, taskId){
+  const r = await getPool().query(
+    `SELECT * FROM agent_approvals
+      WHERE tenant_id = $1 AND task_id = $2 AND status = 'pending'
+      ORDER BY created_at DESC LIMIT 1`,
+    [tenantId, taskId],
+  );
+  return r.rows[0] || null;
+}
+
+/** 已批准但尚未消费的调用；Worker 恢复时先执行它。 */
+export async function getApprovedToolApproval(tenantId, taskId){
+  const r = await getPool().query(
+    `SELECT a.* FROM agent_approvals a
+      WHERE a.tenant_id = $1 AND a.task_id = $2 AND a.status = 'approved'
+        AND a.kind = 'tool_call' AND a.consumed_at IS NULL
+      ORDER BY a.decided_at ASC LIMIT 1`,
+    [tenantId, taskId],
+  );
+  return r.rows[0] || null;
+}
+
+/** 一次性消费：同一审批只可能成功一次（事务内行锁 + consumed_at IS NULL）。 */
+export async function consumeApproval(client, { tenantId, approvalId, userId }){
+  const r = await client.query(
+    `UPDATE agent_approvals
+        SET consumed_at = now(), consumed_by = $3
+      WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND consumed_at IS NULL
+      RETURNING *`,
+    [tenantId, approvalId, userId],
+  );
+  return r.rows[0] || null;
+}
+
+export async function cancelPendingApprovals({ tenantId, taskId, status = 'cancelled', actorId = null }){
+  const r = await getPool().query(
+    `UPDATE agent_approvals SET status = $3, decided_at = now(), decided_by = COALESCE(decided_by, $4)
+      WHERE tenant_id = $1 AND task_id = $2 AND status = 'pending' RETURNING *`,
+    [tenantId, taskId, status, actorId],
+  );
+  return r.rows;
 }
 
 export async function listInFlightToolCalls(tenantId, taskId, client = null){
