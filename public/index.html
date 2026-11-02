@@ -6,8 +6,15 @@
 <title>企业知识库</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307c05f'/%3E%3Cpath d='M9 10.5c0-.8.7-1.5 1.5-1.5H14c1.1 0 2 .9 2 2v12c0-1.1-.9-2-2-2h-3.5A1.5 1.5 0 0 1 9 19.5v-9zM23 10.5c0-.8-.7-1.5-1.5-1.5H18c-1.1 0-2 .9-2 2v12c0-1.1.9-2 2-2h3.5a1.5 1.5 0 0 0 1.5-1.5v-9z' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/ui.css">
+<link rel="stylesheet" href="/css/tasks.css">
+<link rel="stylesheet" href="/css/artifacts.css">
+<link rel="stylesheet" href="/css/admin.css">
 </head>
 <body>
+<a class="skip-link" href="#main-content">跳到主要内容</a>
+<div class="sr-only" id="live-region" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ================= 登录页 ================= -->
 <div class="login-view" id="view-login">
@@ -76,33 +83,41 @@
     </button>
 
     <nav class="menu-scroll" id="menu-scroll">
-      <div class="menu-item" data-nav="kb-list" data-view="kb-list">
+      <a class="menu-item" href="#/kbs" data-route="/kbs" data-view="kb-list" data-nav-key="kbs">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 1 4 13.5v-7zM20 6.5A2.5 2.5 0 0 0 17.5 4H14a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h4.5a2.5 2.5 0 0 0 2.5-2.5v-7z"/></svg></span>
         <span class="mi-title hide-collapsed">知识库</span>
         <span class="mi-badge hide-collapsed" id="badge-kbs"></span>
-      </div>
-      <div class="menu-item" data-nav="artifacts" data-view="artifacts">
+      </a>
+      <a class="menu-item" href="#/tasks" data-route="/tasks" data-nav-key="tasks">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4.5h12a1.5 1.5 0 0 1 1.5 1.5v13L12 15.5 4.5 19V6A1.5 1.5 0 0 1 6 4.5z" stroke-linejoin="round"/><path d="M8 8.5h8M8 12h5" stroke-linecap="round"/></svg></span>
+        <span class="mi-title hide-collapsed">任务</span>
+      </a>
+      <a class="menu-item" href="#/approvals" data-route="/approvals" data-nav-key="approvals">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 4v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V7l7-4z"/><path d="M9.5 12l2 2 3.5-4"/></svg></span>
+        <span class="mi-title hide-collapsed">审批</span>
+        <span class="mi-badge hide-collapsed" id="badge-approvals"></span>
+      </a>
+      <a class="menu-item" href="#/artifacts" data-route="/artifacts" data-nav-key="artifacts">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6l-4.5 6L8 18M16 6l4.5 6L16 18" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="mi-title hide-collapsed">产物</span>
-      </div>
-      <div class="menu-item" data-nav="agents" data-view="agents">
+      </a>
+      <a class="menu-item" href="#/agents" data-route="/agents" data-view="agents" data-nav-key="agents">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 8V5m-3.5 9h.01M15.5 14h.01M9 19l-1.5 2M15 19l1.5 2"/></svg></span>
         <span class="mi-title hide-collapsed">智能体</span>
         <span class="mi-badge hide-collapsed" id="badge-agents"></span>
-      </div>
-      <div class="menu-item" data-nav="tasks" data-view="tasks">
-        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4.5h12a1.5 1.5 0 0 1 1.5 1.5v13L12 15.5 4.5 19V6A1.5 1.5 0 0 1 6 4.5z" stroke-linejoin="round"/><path d="M8 8.5h8M8 12h5" stroke-linecap="round"/></svg></span>
-        <span class="mi-title hide-collapsed">任务</span>
-        <span class="mi-badge hide-collapsed" id="badge-approvals"></span>
-      </div>
-      <div class="menu-item" data-nav="toolbox" data-view="toolbox">
+      </a>
+      <a class="menu-item" href="#/toolbox" data-route="/toolbox" data-view="toolbox" data-nav-key="toolbox">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg></span>
         <span class="mi-title hide-collapsed">工具箱</span>
-      </div>
-      <div class="menu-item" data-nav="organizations" data-view="organizations">
+      </a>
+      <a class="menu-item" href="#/organizations" data-route="/organizations" data-view="organizations" data-nav-key="organizations">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="8" width="7" height="12" rx="1.5"/><rect x="13" y="4" width="7" height="16" rx="1.5"/><path d="M6.8 11.5h.01M6.8 14.5h.01M16 8h.01M16 11.5h.01M16 15h.01"/></svg></span>
         <span class="mi-title hide-collapsed">共享空间</span>
-      </div>
+      </a>
+      <a class="menu-item admin-only" href="#/admin" data-route="/admin" data-nav-key="admin" data-admin="org">
+        <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3.5l1 2.2 2.4-.5 1 2.1 2.3.8-.5 2.4 1.6 1.9-1.6 1.9.5 2.4-2.3.8-1 2.1-2.4-.5-1 2.2-1-2.2-2.4.5-1-2.1-2.3-.8.5-2.4L4.2 12l1.6-1.9-.5-2.4 2.3-.8 1-2.1 2.4.5 1-2.2z" stroke-linejoin="round"/></svg></span>
+        <span class="mi-title hide-collapsed">管理</span>
+      </a>
       <div class="menu-item" id="menu-settings">
         <span class="mi-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3.5l1 2.2 2.4-.5 1 2.1 2.3.8-.5 2.4 1.6 1.9-1.6 1.9.5 2.4-2.3.8-1 2.1-2.4-.5-1 2.2-1-2.2-2.4.5-1-2.1-2.3-.8.5-2.4L4.2 12l1.6-1.9-.5-2.4 2.3-.8 1-2.1 2.4.5 1-2.2z" stroke-linejoin="round"/></svg></span>
         <span class="mi-title hide-collapsed">系统设置</span>
@@ -132,8 +147,18 @@
     </div>
     <div class="resize-handle hide-collapsed" title="拖拽调整宽度"></div>
   </aside>
+  <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
 
-  <main class="main">
+  <main class="main" id="main-content" tabindex="-1">
+    <div class="mobile-topbar">
+      <button class="icon-btn" id="mobile-menu-btn" aria-label="打开导航菜单" aria-controls="sidebar" aria-expanded="false">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/></svg>
+      </button>
+      <span class="mobile-title">企业知识库</span>
+      <button class="icon-btn" id="mobile-cmdk-btn" aria-label="搜索">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      </button>
+    </div>
 
     <!-- ===== 知识库列表 ===== -->
     <section class="view" id="view-kb-list">
@@ -436,6 +461,12 @@
       <div id="org-box"></div>
     </section>
 
+    <!-- ===== 审批收件箱 ===== -->
+    <section class="view" id="view-approvals"></section>
+
+    <!-- ===== 管理控制台 ===== -->
+    <section class="view" id="view-admin"></section>
+
   </main>
 </div>
 
@@ -450,10 +481,10 @@
       <div class="nav-group-title">模型</div>
       <div class="nav-item" data-pane="models"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 9h16M9 9v11"/></svg>模型管理</div>
       <div class="nav-group-title">Agent 平台</div>
-      <div class="nav-item admin-only" data-admin="org" data-pane="tool-registry"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg>工具注册表</div>
-      <div class="nav-item admin-only" data-admin="org" data-pane="mcp"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4" width="8" height="7" rx="1.5"/><rect x="12.5" y="13" width="8" height="7" rx="1.5"/><path d="M11.5 7.5H17a2 2 0 0 1 2 2v3.5M12.5 16.5H7a2 2 0 0 1-2-2V11" stroke-linecap="round"/></svg>MCP 连接</div>
-      <div class="nav-item admin-only" data-admin="platform" data-pane="model-profiles"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3M9 12h6M9 15h4"/></svg>平台模型</div>
-      <div class="nav-item admin-only" data-admin="platform" data-pane="service-principals"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 4v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V7l7-4z"/><path d="M9.5 12l2 2 3.5-4"/></svg>服务主体</div>
+      <div class="nav-item admin-only" data-admin="org" data-admin-link="/admin/tools"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg>工具注册表</div>
+      <div class="nav-item admin-only" data-admin="org" data-admin-link="/admin/mcp"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4" width="8" height="7" rx="1.5"/><rect x="12.5" y="13" width="8" height="7" rx="1.5"/><path d="M11.5 7.5H17a2 2 0 0 1 2 2v3.5M12.5 16.5H7a2 2 0 0 1-2-2V11" stroke-linecap="round"/></svg>MCP 连接</div>
+      <div class="nav-item admin-only" data-admin="platform" data-admin-link="/admin/models"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="12" rx="3"/><path d="M12 4v3M9 12h6M9 15h4"/></svg>平台模型</div>
+      <div class="nav-item admin-only" data-admin="platform" data-admin-link="/admin/principals"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 4v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V7l7-4z"/><path d="M9.5 12l2 2 3.5-4"/></svg>服务主体</div>
       <div class="nav-group-title">空间</div>
       <div class="nav-item" data-pane="members"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 6M17.5 14a5.5 5.5 0 0 1 3 5" stroke-linecap="round"/></svg>成员管理</div>
       <div class="nav-group-title">数据与扩展</div>
@@ -485,11 +516,12 @@
   </div>
 </div>
 
-<!-- 通用对话框挂载点 -->
+<!-- 通用抽屉挂载点 -->
+<div class="drawer-overlay" id="drawer-overlay"><div id="drawer-slot"></div></div>
 <div class="modal-overlay" id="dialog-overlay"><div id="dialog-slot"></div></div>
 <div id="pop-menu-slot"></div>
 <div id="toasts"></div>
 
-<script src="/app.js"></script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

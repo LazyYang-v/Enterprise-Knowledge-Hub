@@ -1,23 +1,13 @@
 /* 企业知识库 · 前端应用 */
-'use strict';
+import { $, $$, esc } from './js/core/dom.js';
+import { toast } from './js/core/ui.js';
+import { authEvents } from './js/core/api.js';
+import { store } from './js/core/store.js';
+import { navigate, parseHash, routeForLegacyView, DEFAULT_ROUTE } from './js/core/navigation.js';
+import { createRouter } from './js/core/router.js';
+import { buildRoutes } from './js/routes.js';
 
 /* ================= 工具 ================= */
-const $ = (s, el) => (el || document).querySelector(s);
-const $$ = (s, el) => Array.prototype.slice.call((el || document).querySelectorAll(s));
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-function toast(msg, ok){
-  const box = $('#toasts');
-  const t = document.createElement('div');
-  t.className = 'toast';
-  t.innerHTML = (ok === false
-    ? '<svg class="ic t-ic" style="color:#ff8a93" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5m0 3h.01" stroke-linecap="round"/></svg>'
-    : '<svg class="ic t-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.5l2.5 2.5 4.5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>')
-    + '<span></span>';
-  t.lastElementChild.textContent = msg;
-  box.appendChild(t);
-  setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 260); }, 2600);
-}
 
 function fmtSize(bytes){
   if (bytes == null) return '—';
@@ -204,13 +194,22 @@ $('#collapse-btn').addEventListener('click', () => $('#sidebar').classList.add('
 
 /* ================= 视图切换 ================= */
 const VIEWS = ['kb-list', 'kb-detail', 'chat-new', 'chat-session', 'agents', 'tasks', 'task-detail', 'artifacts', 'toolbox', 'organizations'];
+const NEW_VIEWS = new Set(['tasks', 'task-detail', 'artifacts']);
 let currentView = 'kb-list';
-function showView(name){
+
+/** 激活旧视图容器（不改变 URL；路由与 showView 共用）。 */
+function activateView(name){
   if (VIEWS.indexOf(name) < 0) name = 'kb-list';
   if (name !== 'task-detail') closeTaskStream();
   currentView = name;
+  const navName = name === 'kb-detail' ? 'kb-list' : name === 'chat-session' ? 'chat-new' : name;
   VIEWS.forEach(v => { const el = $('#view-' + v); if (el) el.classList.toggle('active', v === name); });
-  $$('.menu-item[data-view]').forEach(el => el.classList.toggle('active', el.getAttribute('data-view') === name));
+  $$('.menu-item[data-view]').forEach(el => {
+    const active = el.getAttribute('data-view') === navName;
+    el.classList.toggle('active', active);
+    if (active) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  });
   if (name === 'agents') loadAgents();
   if (name === 'tasks') loadTasks();
   if (name === 'artifacts') loadArtifacts();
@@ -218,14 +217,85 @@ function showView(name){
   if (name === 'organizations') loadOrgs();
   if (name === 'kb-list') loadKbs();
 }
+
+function sameLegacyPath(name, path){
+  switch (name){
+    case 'kb-list': return path === '/kbs';
+    case 'kb-detail': return path.startsWith('/kbs/');
+    case 'chat-new': return path === '/chat/new';
+    case 'chat-session': return path.startsWith('/chat/') && path !== '/chat/new';
+    case 'tasks': return path === '/tasks';
+    case 'task-detail': return path.startsWith('/tasks/') && path !== '/tasks';
+    case 'artifacts': return path === '/artifacts';
+    default: return path === routeForLegacyView(name);
+  }
+}
+
+/** 兼容入口：旧代码调用 showView 时改为驱动 hash 路由。 */
+function showView(name){
+  if (name === 'approvals'){ navigate('/approvals'); return; }
+  if (name === 'admin'){ navigate('/admin'); return; }
+  if (NEW_VIEWS.has(name)){
+    if (!sameLegacyPath(name, parseHash().path)){
+      navigate(routeForLegacyView(name, {
+        taskId: state.currentTask?.id,
+        sessionId: state.currentSession?.id,
+        kbId: state.currentKb?.id,
+      }));
+    }
+    return;
+  }
+  if (VIEWS.indexOf(name) < 0) name = 'kb-list';
+  if (sameLegacyPath(name, parseHash().path)){
+    activateView(name);
+    return;
+  }
+  navigate(routeForLegacyView(name, {
+    kbId: state.currentKb?.id,
+    sessionId: state.currentSession?.id,
+    taskId: state.currentTask?.id,
+  }));
+}
 document.addEventListener('click', e => {
   const nav = e.target.closest('[data-nav]');
-  if (nav && !e.target.closest('.pop-menu')){
+  if (nav && !e.target.closest('.pop-menu') && nav.tagName !== 'A'){
     const target = nav.getAttribute('data-nav');
     if (target === 'chat-new') resetNewChat();
     showView(target);
   }
 });
+
+/* ================= 旧视图路由适配 ================= */
+async function activateLegacyRoute(name, ctx){
+  switch (name){
+    case 'kb-list':
+      activateView('kb-list');
+      break;
+    case 'kb-detail':
+      if (state.currentKb?.id !== ctx.params.id) await openKbDetail({ id: ctx.params.id });
+      else activateView('kb-detail');
+      break;
+    case 'chat-new':
+      resetNewChat();
+      activateView('chat-new');
+      break;
+    case 'chat-session':
+      if (state.currentSession?.id !== ctx.params.id) await openSession(ctx.params.id);
+      else activateView('chat-session');
+      break;
+    case 'agents':
+      activateView('agents');
+      break;
+    case 'toolbox':
+      activateView('toolbox');
+      break;
+    case 'organizations':
+      activateView('organizations');
+      break;
+    default:
+      activateView(name);
+  }
+}
 
 /* ================= 通用对话框 ================= */
 function openDialog(html, { lg = false } = {}){
@@ -311,6 +381,7 @@ $('#menu-logout').addEventListener('click', () => doLogout());
 /* ================= 启动 ================= */
 async function boot(user){
   state.user = user;
+  store.setUser(user);
   $('#view-login').style.display = 'none';
   $('#app').hidden = false;
   setTheme(localStorage.getItem('ekh_theme') || user.theme || 'light');
@@ -323,8 +394,10 @@ async function boot(user){
   await Promise.all([loadModels(), loadSessions(), loadKbs(), loadAgentsData()]);
   refreshBadges();
   loadTaskBadges();
-  showView('kb-list');
   loadQuestions();
+  if (!window.location.hash) window.history.replaceState(null, '', `#${DEFAULT_ROUTE}`);
+  if (routerBooted) viewRouter.refresh();
+  else { routerBooted = true; viewRouter.start(); }
 }
 function applyAdminVisibility(){
   $$('.admin-only').forEach(el => {
@@ -1747,7 +1820,7 @@ function renderTools(){
     const btn = document.createElement('button');
     btn.className = 'btn small';
     btn.textContent = '管理策略';
-    btn.addEventListener('click', () => openSettings('tool-registry'));
+    btn.addEventListener('click', () => navigate('/admin/tools'));
     regCard.appendChild(btn);
   }
   grid.appendChild(regCard);
@@ -3105,6 +3178,12 @@ $('#settings-overlay').addEventListener('click', e => { if (e.target === $('#set
 $('#settings-nav').addEventListener('click', e => {
   const item = e.target.closest('.nav-item');
   if (!item) return;
+  const adminLink = item.getAttribute('data-admin-link');
+  if (adminLink){
+    closeSettings();
+    navigate(adminLink);
+    return;
+  }
   $$('#settings-nav .nav-item').forEach(n => n.classList.remove('active'));
   item.classList.add('active');
   settingsPane = item.getAttribute('data-pane');
@@ -3379,12 +3458,12 @@ function baseCommands(){
     { label: '切换深色 / 浅色主题', icon: 'theme', run: () => $('#theme-btn').click() },
   ];
   if (state.user?.is_admin){
-    items.push({ label: '工具注册表', icon: 'tool', run: () => openSettings('tool-registry') });
-    items.push({ label: 'MCP 连接', icon: 'tool', run: () => openSettings('mcp') });
+    items.push({ label: '工具注册表', icon: 'tool', run: () => navigate('/admin/tools') });
+    items.push({ label: 'MCP 连接', icon: 'tool', run: () => navigate('/admin/mcp') });
   }
   if (state.user?.is_platform_admin){
-    items.push({ label: '平台模型', icon: 'set', run: () => openSettings('model-profiles') });
-    items.push({ label: '服务主体', icon: 'set', run: () => openSettings('service-principals') });
+    items.push({ label: '平台模型', icon: 'set', run: () => navigate('/admin/models') });
+    items.push({ label: '服务主体', icon: 'set', run: () => navigate('/admin/principals') });
   }
   return items;
 }
@@ -3451,6 +3530,39 @@ document.addEventListener('keydown', e => {
     items[state.cmdkSel].scrollIntoView({ block: 'nearest' });
   }
 });
+
+/* ================= 路由与全局事件 ================= */
+let routerBooted = false;
+const legacyAdapter = {
+  activate: activateLegacyRoute,
+  deactivate(){ currentView = null; },
+};
+const viewRouter = createRouter({
+  routes: buildRoutes(legacyAdapter),
+  legacy: legacyAdapter,
+  appName: '企业知识库',
+});
+authEvents.addEventListener('expired', () => doLogout(false));
+
+function closeMobileSidebar(){
+  document.body.classList.remove('sidebar-open');
+  $('#sidebar-overlay')?.classList.remove('show');
+  $('#mobile-menu-btn')?.setAttribute('aria-expanded', 'false');
+}
+$('#mobile-menu-btn')?.addEventListener('click', () => {
+  const open = document.body.classList.toggle('sidebar-open');
+  $('#sidebar-overlay')?.classList.toggle('show', open);
+  $('#mobile-menu-btn')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+$('#mobile-cmdk-btn')?.addEventListener('click', () => openCmdk());
+$('#sidebar-overlay')?.addEventListener('click', closeMobileSidebar);
+document.addEventListener('click', event => {
+  if (document.body.classList.contains('sidebar-open')
+    && !event.target.closest('#sidebar') && !event.target.closest('#mobile-menu-btn')){
+    closeMobileSidebar();
+  }
+});
+window.addEventListener('hashchange', closeMobileSidebar);
 
 /* ================= 初始化 ================= */
 setTheme(localStorage.getItem('ekh_theme') || 'light');

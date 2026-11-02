@@ -1,0 +1,30 @@
+/* 语义 token 与布局常量：在 styles.css 之后加载，保留旧变量。 */
+:root{
+  --success:#00a870; --success-bg:rgba(0,168,112,.12);
+  --warning:#ed7b2f; --warning-bg:rgba(237,123,47,.12);
+  --danger:#e34d59; --danger-bg:rgba(227,77,89,.1);
+  --info:#4f8ef7; --info-bg:rgba(79,142,247,.12);
+
+  --bg-elevated:var(--bg-container);
+  --bg-inset:var(--bg-secondary);
+  --bg-overlay:rgba(0,0,0,.45);
+
+  --focus-ring:0 0 0 3px var(--brand-1);
+  --focus-outline:2px solid var(--brand);
+
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:20px; --space-6:24px; --space-7:32px; --space-8:40px;
+
+  --control-sm:28px; --control-md:32px; --control-lg:40px;
+  --topbar-h:0px;
+
+  --z-sidebar:40; --z-sticky:20; --z-drawer:90; --z-modal:80; --z-toast:120;
+  --transition-fast:.15s ease; --transition-base:.22s ease;
+}
+[data-theme="dark"]{
+  --success:#2fc98d; --success-bg:rgba(47,201,141,.14);
+  --warning:#f2a05f; --warning-bg:rgba(242,160,95,.14);
+  --danger:#ff7a85; --danger-bg:rgba(255,122,133,.14);
+  --info:#7aa7ff; --info-bg:rgba(122,167,255,.14);
+  --bg-overlay:rgba(0,0,0,.62);
+}

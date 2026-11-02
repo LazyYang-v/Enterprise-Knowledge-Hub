@@ -1,0 +1,39 @@
+/* 管理控制台：侧栏 + 内容区，表格与配置列表。 */
+.admin-page{overflow:hidden}
+.admin-layout{display:grid;grid-template-columns:196px minmax(0,1fr);gap:20px;flex:1;min-height:0;padding:0 var(--space-7) 24px}
+.admin-nav{
+  display:flex;flex-direction:column;gap:3px;padding:4px 0;align-self:start;
+  position:sticky;top:0;
+}
+.admin-nav-item{
+  display:flex;align-items:center;height:34px;padding:0 10px;border-radius:var(--radius);
+  color:var(--text-2);text-decoration:none;font-size:13px;transition:background var(--transition-fast),color var(--transition-fast);
+}
+.admin-nav-item:hover{background:var(--bg-active);color:var(--text-1)}
+.admin-nav-item.active{background:var(--brand-1);color:var(--brand);font-weight:500}
+.admin-nav-item[hidden]{display:none}
+.admin-content{min-width:0;overflow-y:auto;padding-bottom:24px;display:flex;flex-direction:column;gap:12px}
+.admin-content > .toolbar{padding:0 0 10px}
+.admin-content .table-wrap{max-width:100%}
+.admin-content .data-table td{max-width:320px}
+
+.profile-list{display:flex;flex-direction:column;gap:8px}
+.profile-row{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:14px 16px;
+  border:.5px solid var(--stroke);border-radius:var(--radius-lg);background:var(--bg-container);
+}
+.profile-row > div:first-child{min-width:0;flex:1}
+.profile-row p{margin:4px 0 8px;font-size:12.5px;line-height:1.55}
+.profile-row .row{flex-wrap:wrap}
+.profile-row .row-actions{flex:none}
+
+@media (max-width:900px){
+  .admin-layout{grid-template-columns:1fr;padding:0 16px 20px;gap:12px}
+  .admin-nav{position:static;flex-direction:row;overflow-x:auto;padding-bottom:8px;border-bottom:1px solid var(--stroke)}
+  .admin-nav-item{white-space:nowrap}
+  .admin-content .data-table td{max-width:none}
+}
+@media (max-width:720px){
+  .profile-row{flex-direction:column}
+  .profile-row .row-actions{width:100%;justify-content:flex-start}
+}

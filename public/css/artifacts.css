@@ -1,0 +1,26 @@
+/* 统一产物库与预览。 */
+.artifact-list{display:flex;flex-direction:column;gap:8px;padding:2px var(--space-7) 24px}
+.artifact-row{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 14px;
+  border:.5px solid var(--stroke);border-radius:var(--radius-lg);background:var(--bg-container);
+}
+.artifact-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.artifact-main strong{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.artifact-main .muted{font-size:12px;line-height:1.5}
+.artifact-main a{color:var(--brand);text-decoration:none;font-size:12px}
+.artifact-main a:hover{text-decoration:underline}
+.artifact-preview{display:flex;flex-direction:column;gap:12px;min-height:180px}
+.preview-image{max-width:100%;max-height:64vh;object-fit:contain;border-radius:var(--radius);background:var(--bg-secondary);align-self:center}
+.preview-text{max-height:62vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.artifact-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;padding:0 32px 24px}
+.artifact-card{border:.5px solid var(--stroke);border-radius:var(--radius-lg);padding:14px;background:var(--bg-container);cursor:pointer}
+.artifact-card:hover{border-color:var(--brand)}
+
+@media (max-width:900px){
+  .artifact-list{padding-left:16px;padding-right:16px}
+  .artifact-grid{padding-left:16px;padding-right:16px}
+}
+@media (max-width:720px){
+  .artifact-row{flex-direction:column;align-items:flex-start}
+  .artifact-row .row-actions{width:100%;justify-content:flex-start}
+}
