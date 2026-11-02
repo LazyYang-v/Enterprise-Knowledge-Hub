@@ -57,5 +57,9 @@ test('P0-5 成果评测结构完整且不含二进制 fixture', () => {
     assert.ok(c.expect && typeof c.expect === 'object', `${c.id} 缺少 expect`);
   }
   const fixtures = fs.readdirSync(path.join(ROOT, 'evals/p0/fixtures'));
-  assert.deepEqual(fixtures, ['README.md'], 'fixture 必须运行时生成，不提交二进制');
+  assert.deepEqual(fixtures.sort(), ['README.md', 'crm-mock'], 'fixture 只在运行时生成二进制；crm-mock 是源码');
+  for (const name of fixtures){
+    const stat = fs.statSync(path.join(ROOT, 'evals/p0/fixtures', name));
+    if (stat.isFile()) assert.ok(!/\.(pdf|docx?|xlsx?|zip|png|jpe?g)$/i.test(name), `不得提交二进制 fixture：${name}`);
+  }
 });

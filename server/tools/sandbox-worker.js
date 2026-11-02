@@ -8,6 +8,23 @@ import vm from 'node:vm';
 const MAX_INPUT = 512 * 1024;
 const DEFINE_TIMEOUT = 2000;
 const MAX_RESULT = 256 * 1024;
+const HARD_TIMEOUT_MS = Number(process.env.EKH_SANDBOX_HARD_TIMEOUT_MS) || 0;
+
+// 容器内硬超时：父进程被 SIGKILL 后仍能自行退出，避免孤儿容器。
+if (HARD_TIMEOUT_MS > 0){
+  setTimeout(() => process.exit(124), HARD_TIMEOUT_MS);
+}
+
+// 待决 Promise / 等待中的工具不会保持事件循环；显式保活，直到有结果或被父进程杀死。
+const keepAlive = setInterval(() => {}, 1000);
+
+// process.exit 可能截断管道写入；先等 stdout flush 再退出。
+function writeOut(payload, code = 0){
+  process.stdout.write(JSON.stringify(payload), () => {
+    clearInterval(keepAlive);
+    process.exit(code);
+  });
+}
 
 function violation(name){
   const e = new Error(`沙箱禁止访问 ${name}`);
@@ -101,7 +118,14 @@ async function handle(payload){
     const { spec } = evalTool(payload.code);
     let result;
     try {
-      result = spec.execute(payload.args && typeof payload.args === 'object' ? payload.args : {});
+      result = spec.execute(
+        payload.args && typeof payload.args === 'object' ? payload.args : {},
+        {
+          idempotency_key: payload.context?.idempotency_key || null,
+          tool_call_id: payload.context?.tool_call_id || null,
+          profile: payload.profile || 'code_exec',
+        },
+      );
       if (result && typeof result.then === 'function') result = await result;
     } catch (e){
       const err = new Error('工具执行失败：' + cleanMessage(e));
@@ -122,37 +146,32 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => {
   buffer += chunk;
   if (buffer.length > MAX_INPUT){
-    process.stdout.write(JSON.stringify({ ok: false, error: { code: 'tool_too_large', message: '沙箱输入过大' } }));
-    process.exit(2);
+    writeOut({ ok: false, error: { code: 'tool_too_large', message: '沙箱输入过大' } }, 2);
   }
 });
 process.stdin.on('end', async () => {
   let payload;
   try { payload = JSON.parse(buffer || '{}'); }
   catch {
-    process.stdout.write(JSON.stringify({ ok: false, error: { code: 'tool_parse_failed', message: '沙箱请求不是合法 JSON' } }));
-    process.exit(2);
+    writeOut({ ok: false, error: { code: 'tool_parse_failed', message: '沙箱请求不是合法 JSON' } }, 2);
+    return;
   }
   try {
     const out = await handle(payload);
-    process.stdout.write(JSON.stringify({ ok: true, ...out }));
-    process.exit(0);
+    writeOut({ ok: true, ...out }, 0);
   } catch (e){
-    process.stdout.write(JSON.stringify({
+    writeOut({
       ok: false,
       error: {
         code: e?.code || 'tool_execution_failed',
         message: cleanMessage(e),
       },
-    }));
-    process.exit(0);
+    }, 0);
   }
 });
 process.on('uncaughtException', e => {
-  process.stdout.write(JSON.stringify({ ok: false, error: { code: 'tool_execution_failed', message: cleanMessage(e) } }));
-  process.exit(0);
+  writeOut({ ok: false, error: { code: 'tool_execution_failed', message: cleanMessage(e) } }, 0);
 });
 process.on('unhandledRejection', e => {
-  process.stdout.write(JSON.stringify({ ok: false, error: { code: 'tool_execution_failed', message: cleanMessage(e) } }));
-  process.exit(0);
+  writeOut({ ok: false, error: { code: 'tool_execution_failed', message: cleanMessage(e) } }, 0);
 });

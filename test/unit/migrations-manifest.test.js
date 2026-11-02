@@ -30,6 +30,7 @@ test('控制面核心表与 append-only 保护已定义', () => {
     'agent_plan_items', 'agent_steps', 'agent_tool_calls', 'agent_tool_attempts', 'agent_approvals',
     'agent_input_requests', 'agent_checkpoints', 'agent_events', 'agent_evidence', 'artifact_blobs',
     'artifacts', 'task_attachments', 'audit_log', 'idempotency_keys', 'worker_nodes',
+    'tenant_rate_limits', 'rate_limit_counters',
   ]){
     assert.match(sql, new RegExp(`CREATE TABLE ${table}\\b`), `缺少表 ${table}`);
   }

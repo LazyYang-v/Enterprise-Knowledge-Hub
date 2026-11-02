@@ -1,7 +1,7 @@
-# 威胁模型（P0-5 草案）
+# 威胁模型（P0-6）
 
 > 来源：`Enterprise-Knowledge-Hub-Agent-P0-Design.md` §14.11、§14.9、§3.6。
-> 本文件描述 P0 目标系统的信任边界与威胁。P0-1 修复 G2，P0-3 修复 G1/G9/G10，P0-4 修复 G3–G6/G8，P0-5 修复 S-09（成果文件 ACL）。
+> 本文件描述 P0 目标系统的信任边界与威胁。P0-1 修复 G2，P0-3 修复 G1/G9/G10，P0-4 修复 G3–G6/G8，P0-5 修复 S-09（成果文件 ACL），P0-6 收口容器沙箱、MCP 出网、租户限流、外部写幂等与预算报告。
 
 ## 1. 信任边界
 
@@ -30,6 +30,11 @@
 | 成果文件 | 路径遍历、未授权下载、ZIP 逃逸/炸弹 | artifact id、canonical path、下载重新校验 ACL、ZIP 护栏 | **S-09 已修复（P0-5）**：文件名单段 basename + 控制字符/保留名拒绝；blob 路径只由 SHA-256 生成并做 realpath 根内校验；下载每次重新校验任务 ACL，失败统一 404，响应 `attachment`/`nosniff`/`private, no-store`；审计 `artifact.download`；ZIP 拒绝 `..`/绝对路径/符号链接/加密/重复名/超限/高压缩比。测试：`test/unit/artifact-paths.test.js`、`test/unit/zip-guard.test.js`、`test/pg/artifacts-api.test.js`、`test/pg/artifact-acl.test.js` |
 | 工具执行 | 模型越权调用、危险副作用无人确认、重放 | 任务快照、默认拒绝、一次性审批绑定参数、预算 | **G8 已修复（P0-4）**：PolicyEngine + `agent_approvals`（`args_hash`/`consumed_at`）+ 执行前持久化；审批过期不执行；工具尝试/调用完成按 `attempt+worker+lease_epoch` fencing。测试：`test/pg/tool-approval.test.js`、`test/pg/task-fencing.test.js`、`test/unit/tool-policy.test.js` |
 | 审计与事件 | 篡改、删除 | append-only、权限分离 | 控制面表已有 append-only 触发器；**P0-4 运行时审计已接入**（策略拒绝/审批/工具/管理操作，只写 ID 与哈希） |
+| 沙箱逃逸与网络 | 自定义工具逃逸、横向移动、资源耗尽、孤儿进程 | 容器隔离、无网络、只读根、非 root、cap-drop、pids/memory/cpu 限额、生命周期回收 | **P0-6**：`container` 显式启用且失败关闭；`--network=none`、只读根、uid 10001、`cap-drop=ALL`、`no-new-privileges`、pids/memory/cpu/ulimit；abort/超时/停机杀容器；容器内硬超时兜底。残余风险：容器运行时本身是信任边界，非 VM 级隔离 |
+| MCP 出站（SSRF） | 私网/元数据地址、重定向绕过、DNS rebinding、私网 mock 误用 | 解析后拒绝、禁重定向、allowlist、每次调用重校验 | **P0-6**：默认拒绝私网/元数据/userinfo/3xx；连接 CRUD 与调用都校验；本机 mock 必须显式放开。残余风险：DNS rebinding 无法完全消除，需出网代理/固定 IP |
+| 租户资源滥用 | 单租户刷任务/模型/工具拖垮共享 PG/Worker | per-tenant 固定窗口、原子计数、429 + Retry-After、fail-closed | **P0-6**：`tenant_rate_limits`/`rate_limit_counters`；模型超限可重试，工具超限非致命；PG 故障默认拒绝，显式 `fail_open` 才降级 |
+| 外部写重放 | Worker 崩溃后重复创建订单/记录 | provider 幂等键跨恢复稳定、外部系统去重 | **P0-6**：`sha256(tenant+task+tool+args_hash)` 写入 `Idempotency-Key` 与 `_meta.idempotency_key`；同一逻辑 `tool_call_id` 复用、attempt 递增；无幂等键的写仍进入人工对账 |
+| 预算耗尽 | 无上限消耗 token/时间/工具，丢失已完成工作 | 五类预算硬检查 + 部分成果报告 | **P0-6**：`max_steps/max_wall_ms/max_model_calls/max_tokens/max_tool_calls`；耗尽先写 `budget-report.json` 与 `budget.exhausted`，任务仍 `failed/budget_exhausted` |
 
 详细复现记录见 `docs/baseline/c1-c8.md`。
 

@@ -51,6 +51,28 @@ jobs:
         run: npm run db:migrate
       - name: Control-plane, task runtime & recovery tests
         run: npm run test:pg
+      - name: Eval runner smoke (fake model, T25-T30)
+        env:
+          EKH_DATA_DIR: /tmp/ekh-eval-${{ github.run_id }}
+        run: npm run eval:p0:fake -- --tasks=T25,T26,T27,T28,T29,T30
+
+  sandbox-tests:
+    name: Container sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Build sandbox image
+        run: npm run sandbox:build
+      - name: Container sandbox tests
+        env:
+          EKH_TOOL_SANDBOX_MODE: container
+        run: node --test test/integration/sandbox-container.test.js
 
   baseline:
     name: C1-C8 baseline (non-gating)

@@ -1,5 +1,6 @@
 // MCP 连接与工具缓存仓储。凭证只保存 credential_ref，任何查询都不回显密钥。
 import { getPool } from './pg.js';
+import { assertMcpEndpoint } from '../tools/egress-policy.js';
 
 export class McpConnectionError extends Error {
   constructor(message, code = 'mcp_connection_invalid', status = 400){
@@ -46,18 +47,24 @@ export async function getConnection({ tenantId, id = null, name = null }){
 
 export async function createConnection({
   tenantId, name, transport = 'streamable_http', endpoint, authType = 'none',
-  credentialRef = '', allowedTools = [], deniedTools = [],
+  credentialRef = '', allowedTools = [], deniedTools = [], egressAllowlist = [],
 }){
   assertConnectionName(name);
   if (transport === 'stdio') throw new McpConnectionError('P0 不支持 stdio MCP 连接', 'mcp_stdio_disabled');
   if (!/^https?:\/\//i.test(String(endpoint || ''))) throw new McpConnectionError('endpoint 必须是 http/https URL');
+  const allowlist = Array.isArray(egressAllowlist) ? egressAllowlist.map(String).filter(Boolean).slice(0, 50) : [];
+  try {
+    await assertMcpEndpoint({ endpoint, egress_allowlist: allowlist });
+  } catch (e){
+    throw new McpConnectionError(e.message, 'mcp_egress_denied', 400);
+  }
   try {
     const r = await getPool().query(
       `INSERT INTO mcp_connections
-         (tenant_id, name, transport, endpoint, auth_type, credential_ref, allowed_tools, denied_tools)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb) RETURNING *`,
+         (tenant_id, name, transport, endpoint, auth_type, credential_ref, allowed_tools, denied_tools, egress_allowlist)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb) RETURNING *`,
       [tenantId, name, transport, endpoint, authType, credentialRef,
-        JSON.stringify(allowedTools || []), JSON.stringify(deniedTools || [])],
+        JSON.stringify(allowedTools || []), JSON.stringify(deniedTools || []), JSON.stringify(allowlist)],
     );
     return r.rows[0];
   } catch (e){
@@ -67,9 +74,23 @@ export async function createConnection({
 }
 
 export async function updateConnection({ tenantId, id, patch = {} }){
-  const allowed = ['endpoint', 'auth_type', 'credential_ref', 'allowed_tools', 'denied_tools', 'status'];
+  const allowed = ['endpoint', 'auth_type', 'credential_ref', 'allowed_tools', 'denied_tools', 'status', 'egress_allowlist'];
   const sets = [];
   const params = [tenantId, id];
+  const current = await getConnection({ tenantId, id });
+  if (!current) return null;
+  const nextEndpoint = patch.endpoint ?? current.endpoint;
+  const nextAllowlist = patch.egress_allowlist ?? current.egress_allowlist ?? [];
+  if (patch.endpoint != null || patch.egress_allowlist != null){
+    if (!/^https?:\/\//i.test(String(nextEndpoint || ''))){
+      throw new McpConnectionError('endpoint 必须是 http/https URL');
+    }
+    try {
+      await assertMcpEndpoint({ endpoint: nextEndpoint, egress_allowlist: nextAllowlist });
+    } catch (e){
+      throw new McpConnectionError(e.message, 'mcp_egress_denied', 400);
+    }
+  }
   for (const [key, value] of Object.entries(patch)){
     if (!allowed.includes(key)) throw new McpConnectionError(`不允许更新字段：${key}`);
     if (key === 'endpoint' && !/^https?:\/\//i.test(String(value || ''))){

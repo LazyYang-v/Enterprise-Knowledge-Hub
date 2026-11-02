@@ -18,6 +18,7 @@ const CORE_TABLES = [
   'agent_tool_attempts', 'agent_approvals', 'agent_input_requests', 'agent_checkpoints',
   'agent_events', 'agent_evidence', 'artifact_blobs', 'artifacts', 'task_attachments',
   'audit_log', 'idempotency_keys', 'worker_nodes',
+  'tenant_rate_limits', 'rate_limit_counters',
 ];
 
 async function withClient(fn){
@@ -34,7 +35,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // dry-run 不创建 tracking 表，也不写业务表。
   const dry = await migrate({ connectionString, dryRun: true, log: () => {} });
-  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
+  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing', '0006_p0_6_rate_limits']);
   assert.deepEqual(dry.applied, []);
   await withClient(async c => {
     const r = await c.query("SELECT to_regclass('public.schema_migrations') AS t");
@@ -43,16 +44,16 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // 首次执行。
   const first = await migrate({ connectionString, log: () => {} });
-  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
+  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing', '0006_p0_6_rate_limits']);
   assert.deepEqual(first.skipped, []);
 
   // 第二次执行幂等。
   const second = await migrate({ connectionString, log: () => {} });
   assert.deepEqual(second.applied, []);
-  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
+  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing', '0006_p0_6_rate_limits']);
 
   const s = await status({ connectionString });
-  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing']);
+  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence', '0004_p0_4_tools_approvals', '0005_p0_4_fencing', '0006_p0_6_rate_limits']);
   assert.deepEqual(s.pending, []);
 
   await withClient(async c => {
@@ -70,6 +71,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
       'uq_agent_evidence_chunk', 'idx_agent_evidence_task_time', 'idx_agent_evidence_doc_version',
       'idx_skills_tenant_name', 'idx_agent_tool_calls_task_tool', 'idx_tool_registry_owner',
       'idx_agent_approvals_consumed', 'idx_service_principals_active', 'idx_agent_evidence_claim',
+      'idx_rate_limit_counters_expiry', 'idx_rate_limit_counters_tenant_bucket',
     ]) assert.ok(indexNames.has(idx), `缺少索引 ${idx}`);
 
     const evidenceCols = await c.query(
@@ -94,6 +96,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
     assert.ok((await cols('agent_approvals')).has('consumed_by'));
     assert.ok((await cols('service_principals')).has('revoked_at'));
     assert.ok((await cols('agent_tasks')).has('lease_epoch'));
+    assert.ok((await cols('mcp_connections')).has('egress_allowlist'));
 
     const triggers = await c.query("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal");
     const triggerNames = new Set(triggers.rows.map(r => r.tgname));

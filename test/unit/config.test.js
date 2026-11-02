@@ -55,3 +55,55 @@ test('非法端口回退到 3210', () => {
   assert.equal(parseConfig({ PORT: '-1' }).port, 3210);
   assert.equal(parseConfig({ PORT: '70000' }).port, 3210);
 });
+
+test('P0-6：沙箱、MCP 出网、限流与故障注入默认值', () => {
+  const c = parseConfig({});
+  assert.equal(c.tools.sandboxMode, 'process');
+  assert.equal(c.tools.sandboxImage, 'ekh-sandbox:1');
+  assert.equal(c.tools.sandboxPidsLimit, 64);
+  assert.equal(c.tools.sandboxCpuLimit, 0.5);
+  assert.equal(c.mcp.allowPrivateHosts, false);
+  assert.equal(c.mcp.allowMetadataHosts, false);
+  assert.deepEqual(c.mcp.egressAllowlist, []);
+  assert.equal(c.rateLimits.enabled, true);
+  assert.equal(c.rateLimits.failOpen, false);
+  assert.equal(c.rateLimits.taskCreate.limit, 30);
+  assert.equal(c.rateLimits.modelCall.limit, 120);
+  assert.equal(c.rateLimits.toolCall.limit, 120);
+  assert.equal(c.testing.faultInjection, false);
+  assert.equal(c.testing.faultSeed, 1);
+});
+
+test('P0-6：container 模式与限流开关可配置', () => {
+  const c = parseConfig({
+    EKH_TOOL_SANDBOX_MODE: 'container',
+    EKH_MCP_ALLOW_PRIVATE_HOSTS: '1',
+    EKH_MCP_EGRESS_ALLOWLIST: 'mcp.example.com, api.example.com',
+    EKH_RATE_LIMIT_ENABLED: '0',
+    EKH_RATE_LIMIT_FAIL_OPEN: '1',
+    EKH_FAULT_INJECTION: '1',
+    EKH_FAULT_CONFIG: '[{"point":"model.before_call","action":"delay"}]',
+    EKH_FAULT_SEED: '7',
+  });
+  assert.equal(c.tools.sandboxMode, 'container');
+  assert.equal(c.mcp.allowPrivateHosts, true);
+  assert.deepEqual(c.mcp.egressAllowlist, ['mcp.example.com', 'api.example.com']);
+  assert.equal(c.rateLimits.enabled, false);
+  assert.equal(c.rateLimits.failOpen, true);
+  assert.equal(c.testing.faultInjectionRequested, true);
+  assert.equal(c.testing.faultInjection, true);
+  assert.equal(c.testing.faultSeed, 7);
+});
+
+test('P0-6：生产环境强制关闭故障注入', () => {
+  const c = parseConfig({ NODE_ENV: 'production', EKH_FAULT_INJECTION: '1' });
+  assert.equal(c.testing.faultInjectionRequested, true);
+  assert.equal(c.testing.faultInjection, false);
+  assert.equal(c.isProduction, true);
+});
+
+test('P0-6：非法沙箱模式与限流窗口回退默认值', () => {
+  const c = parseConfig({ EKH_TOOL_SANDBOX_MODE: 'nope', EKH_RATE_LIMIT_RETENTION_MS: '1' });
+  assert.equal(c.tools.sandboxMode, 'process');
+  assert.ok(c.rateLimits.retentionMs >= 10 * 60 * 1000);
+});

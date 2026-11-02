@@ -12,6 +12,7 @@ import orgRoutes from './routes/orgs.js';
 import miscRoutes from './routes/misc.js';
 import retrieveRoutes from './routes/retrieve.js';
 import taskRoutes, { approvalsRouter } from './routes/tasks.js';
+import taskArtifactRoutes from './routes/task-artifacts.js';
 import knowledgeRoutes from './routes/knowledge.js';
 import skillRoutes from './routes/skills.js';
 import toolRegistryRoutes from './routes/tool-registry.js';
@@ -42,6 +43,7 @@ export function createApp(){
   // Agent 平台任务 API：默认关闭，通过 AGENT_PLATFORM_ENABLED=1 启用。
   app.use('/api/tasks', taskRoutes);
   app.use('/api/approvals', approvalsRouter);
+  app.use('/api/task-artifacts', taskArtifactRoutes);
   // 知识 API 同样受 AGENT_PLATFORM_ENABLED 控制（router 内部返回 404）。
   app.use('/api/knowledge', knowledgeRoutes);
   app.use('/api', skillRoutes);

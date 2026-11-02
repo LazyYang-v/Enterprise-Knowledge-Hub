@@ -21,6 +21,7 @@ import { resolveTools } from '../tools/registry.js';
 import { isAdminUser } from '../auth/admin.js';
 import { getArtifactService } from '../artifacts/service.js';
 import { contentDisposition } from '../artifacts/paths.js';
+import { enforceTenantRate } from '../control/rate-limit.js';
 
 const router = Router();
 export const approvalsRouter = Router();
@@ -59,6 +60,16 @@ function mapError(res, e, req){
     return fail(res, status, code, e.message, req);
   }
   if (e?.code === 'lease_lost') return fail(res, 409, 'conflict', e.message, req);
+  if (e?.status === 429){
+    const retry = Number(e.retry_after_seconds) || 1;
+    res.set('Retry-After', String(retry));
+    return fail(res, 429, 'rate_limited', e.message, req, {
+      bucket: e.bucket || null, limit: e.limit || null, retry_after_seconds: retry,
+    }, true);
+  }
+  if (e?.status === 503 && e?.code === 'rate_limit_unavailable'){
+    return fail(res, 503, 'rate_limit_unavailable', e.message, req, null, true);
+  }
   if (typeof e?.status === 'number' && e.status >= 400 && e.status < 600){
     return fail(res, e.status, e.code || 'request_error', e.message, req, null, !!e.retryable);
   }
@@ -123,6 +134,9 @@ async function completeIdempotentRecord({ tenantId, principalId, endpoint, key, 
 router.post('/', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
+    await enforceTenantRate({
+      tenantId, bucket: 'task_create', actorId: req.user.id,
+    });
     const body = req.body || {};
     const requestHash = crypto.createHash('sha256').update(JSON.stringify({
       goal: body.goal, title: body.title, input: taskInputFromBody(body), budget: body.budget, priority: body.priority,
@@ -161,14 +175,21 @@ router.get('/', async (req, res) => {
     const result = await service.listTasks({
       tenantId, ownerId: req.user.id,
       limit: Number(req.query.limit) || 20, cursor,
+      status: req.query.status || null,
+      q: req.query.q || null,
     });
     res.json({
       tasks: result.tasks.map(t => ({
-        id: t.id, title: t.title, status: t.status, priority: t.priority,
-        usage: t.usage_json, created_at: t.created_at, updated_at: t.updated_at,
+        id: t.id, title: t.title, goal: t.goal, status: t.status, priority: t.priority,
+        usage: t.usage_json, budget: t.budget_json,
+        last_error_code: t.last_error_code || null,
+        last_error_detail: t.last_error_detail || null,
+        result_summary: t.result_summary || null,
+        created_at: t.created_at, updated_at: t.updated_at,
         last_event_seq: t.event_seq,
       })),
       next_cursor: result.next_cursor,
+      counts: result.counts,
       request_id: requestId(req),
     });
   } catch (e){ mapError(res, e, req); }
@@ -415,9 +436,15 @@ approvalsRouter.get('/', async (req, res) => {
   try {
     const tenantId = await resolveTenantId(req.user.id);
     const rows = await service.listApprovals({
-      tenantId, status: String(req.query.status || 'pending'), ownerId: req.user.id,
+      tenantId,
+      status: req.query.status == null ? 'pending' : String(req.query.status),
+      taskId: req.query.task_id ? String(req.query.task_id) : null,
+      userId: req.user.id,
+      isAdmin: isAdminUser(req.user),
+      ownerId: req.user.id,
+      limit: Number(req.query.limit) || 50,
     });
-    res.json({ approvals: rows, request_id: requestId(req) });
+    res.json({ approvals: rows, count: rows.length, request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
 

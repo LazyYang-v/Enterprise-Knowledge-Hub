@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "source": "tasks.json",
+  "description": "P0 评测运行映射：基础元数据来自 tasks.json，这里补充可执行的场景/工具/预算。",
+  "tasks": [
+    { "id": "T01", "scenario": "generic" },
+    { "id": "T02", "scenario": "generic" },
+    { "id": "T03", "scenario": "generic" },
+    { "id": "T04", "scenario": "generic" },
+    { "id": "T05", "scenario": "generic" },
+    { "id": "T06", "scenario": "generic" },
+    { "id": "T07", "scenario": "generic" },
+    { "id": "T08", "scenario": "generic" },
+    { "id": "T09", "scenario": "generic" },
+    { "id": "T10", "scenario": "generic" },
+    { "id": "T11", "scenario": "generic" },
+    { "id": "T12", "scenario": "generic" },
+    { "id": "T13", "scenario": "generic" },
+    { "id": "T14", "scenario": "generic" },
+    { "id": "T15", "scenario": "generic" },
+    { "id": "T16", "scenario": "generic" },
+    { "id": "T17", "scenario": "generic" },
+    { "id": "T18", "scenario": "generic" },
+    { "id": "T19", "scenario": "generic" },
+    { "id": "T20", "scenario": "generic" },
+    { "id": "T21", "scenario": "generic" },
+    { "id": "T22", "scenario": "generic" },
+    { "id": "T23", "scenario": "generic" },
+    { "id": "T24", "scenario": "generic" },
+    { "id": "T25", "scenario": "cross_tenant" },
+    { "id": "T26", "scenario": "prompt_injection", "tools": ["knowledge.search"] },
+    { "id": "T27", "scenario": "approval", "tools": ["mcp.crm.create_record"] },
+    { "id": "T28", "scenario": "kill_recovery" },
+    {
+      "id": "T29",
+      "scenario": "idempotency",
+      "tools": ["mcp.crm.create_record"],
+      "budget": { "max_model_calls": 8 }
+    },
+    { "id": "T30", "scenario": "budget", "budget": { "max_model_calls": 1 } }
+  ]
+}

@@ -67,7 +67,7 @@ export function parseConfig(env = process.env){
       instructionMaxChars: parsePositiveInt(env.EKH_SKILL_INSTRUCTION_MAX_CHARS, 8000, 100000),
     }),
     tools: Object.freeze({
-      sandboxMode: parseEnum(env.EKH_TOOL_SANDBOX_MODE, ['process', 'required', 'off'], 'process'),
+      sandboxMode: parseEnum(env.EKH_TOOL_SANDBOX_MODE, ['process', 'required', 'container', 'off'], 'process'),
       timeoutMs: parsePositiveInt(env.EKH_TOOL_TIMEOUT_MS, 15000, 120000),
       maxOutputChars: parsePositiveInt(env.EKH_TOOL_MAX_OUTPUT_CHARS, 8000, 64000),
       sandboxMemoryMb: parsePositiveInt(env.EKH_TOOL_SANDBOX_MEMORY_MB, 256, 2048),
@@ -75,10 +75,49 @@ export function parseConfig(env = process.env){
       highRiskApprovalTtlMs: parsePositiveInt(env.EKH_TOOL_HIGH_RISK_APPROVAL_TTL_MS, 60 * 60 * 1000, 24 * 60 * 60 * 1000),
       catalogMaxChars: parsePositiveInt(env.EKH_TOOL_CATALOG_MAX_CHARS, 12000, 64000),
       maxToolsPerTask: parsePositiveInt(env.EKH_TOOL_MAX_PER_TASK, 20, 50),
+      sandboxImage: String(env.EKH_SANDBOX_IMAGE || 'ekh-sandbox:1'),
+      sandboxDockerBin: String(env.EKH_SANDBOX_DOCKER_BIN || 'docker'),
+      sandboxDockerProbeMs: parsePositiveInt(env.EKH_SANDBOX_DOCKER_PROBE_MS, 2500, 10000),
+      sandboxPidsLimit: parsePositiveInt(env.EKH_SANDBOX_PIDS_LIMIT, 64, 512),
+      sandboxCpuLimit: (() => {
+        const n = Number(env.EKH_SANDBOX_CPU_LIMIT ?? '0.5');
+        return Number.isFinite(n) && n > 0 ? n : 0.5;
+      })(),
+      sandboxTmpfsMb: parsePositiveInt(env.EKH_SANDBOX_TMPFS_MB, 64, 512),
+      sandboxWorkspaceMb: parsePositiveInt(env.EKH_SANDBOX_WORKSPACE_MB, 16, 256),
+      sandboxHardTimeoutGraceMs: parsePositiveInt(env.EKH_SANDBOX_HARD_TIMEOUT_GRACE_MS, 2000, 30000),
     }),
     mcp: Object.freeze({
       clientTimeoutMs: parsePositiveInt(env.EKH_MCP_CLIENT_TIMEOUT_MS, 15000, 120000),
       stdioEnabled: parseBool(env.EKH_MCP_STDIO_ENABLED, false),
+      allowPrivateHosts: parseBool(env.EKH_MCP_ALLOW_PRIVATE_HOSTS, false),
+      allowMetadataHosts: parseBool(env.EKH_MCP_ALLOW_METADATA_HOSTS, false),
+      egressAllowlist: Object.freeze(parseList(env.EKH_MCP_EGRESS_ALLOWLIST)),
+    }),
+    rateLimits: Object.freeze({
+      enabled: parseBool(env.EKH_RATE_LIMIT_ENABLED, true),
+      failOpen: parseBool(env.EKH_RATE_LIMIT_FAIL_OPEN, false),
+      retentionMs: Math.max(10 * 60 * 1000, parsePositiveInt(env.EKH_RATE_LIMIT_RETENTION_MS, 10 * 60 * 1000, 24 * 60 * 60 * 1000)),
+      taskCreate: Object.freeze({
+        limit: parsePositiveInt(env.EKH_RATE_TASK_CREATE_LIMIT, 30, 100000),
+        windowMs: parsePositiveInt(env.EKH_RATE_TASK_CREATE_WINDOW_MS, 60000, 3600000),
+      }),
+      modelCall: Object.freeze({
+        limit: parsePositiveInt(env.EKH_RATE_MODEL_CALL_LIMIT, 120, 1000000),
+        windowMs: parsePositiveInt(env.EKH_RATE_MODEL_CALL_WINDOW_MS, 60000, 3600000),
+      }),
+      toolCall: Object.freeze({
+        limit: parsePositiveInt(env.EKH_RATE_TOOL_CALL_LIMIT, 120, 1000000),
+        windowMs: parsePositiveInt(env.EKH_RATE_TOOL_CALL_WINDOW_MS, 60000, 3600000),
+      }),
+    }),
+    testing: Object.freeze({
+      faultInjectionRequested: parseBool(env.EKH_FAULT_INJECTION, false),
+      faultInjection: !isProduction && parseBool(env.EKH_FAULT_INJECTION, false),
+      faultAllowProduction: parseBool(env.EKH_FAULT_ALLOW_PRODUCTION, false),
+      faultConfig: String(env.EKH_FAULT_CONFIG || ''),
+      faultConfigFile: String(env.EKH_FAULT_CONFIG_FILE || ''),
+      faultSeed: parsePositiveInt(env.EKH_FAULT_SEED, 1, 2 ** 31 - 1),
     }),
     models: Object.freeze({
       secretDir: String(env.EKH_MODEL_SECRET_DIR || ''),

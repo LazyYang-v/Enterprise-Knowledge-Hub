@@ -9,7 +9,10 @@ import { listToolPolicies } from '../control/tool-registry-repo.js';
 import { countToolCalls } from '../control/task-repo.js';
 import { getCustomToolVersion } from './custom-tools-repo.js';
 import { runSandbox } from './sandbox.js';
+import { assertSandboxProfileSupported } from './sandbox-runtime.js';
 import { callMcpTool } from './mcp-client.js';
+import { enforceTenantRate } from '../control/rate-limit.js';
+import { injectFault } from '../testing/fault-injection.js';
 
 function snapshotList(task){
   return Array.isArray(task?.input_json?.tools) ? task.input_json.tools : [];
@@ -66,8 +69,22 @@ export function createToolExecutor({ task, knowledge = null, signal = null, arti
     return { snapshot, current, decision };
   }
 
-  async function execute(descriptor, args, { toolCallId = null, stepId = null } = {}){
+  async function execute(descriptor, args, { toolCallId = null, stepId = null, idempotencyKey = null } = {}){
     try {
+      // 工具桶超限按非致命失败回传模型；任务本身继续，由模型决定是否换路。
+      await enforceTenantRate({
+        tenantId: task.tenant_id, bucket: 'tool_call',
+        actorType: 'worker', actorId: workerId,
+      });
+      const before = await injectFault('tool.before_execute', {
+        task, tool_name: descriptor.name, signal, tool_call_id: toolCallId,
+      });
+      if (before?.result?.kind === 'http_status'){
+        return normalizeToolResult({
+          status: 'failed', errorCode: 'fault_http_status',
+          errorMessage: `注入工具 HTTP ${before.result.status}`,
+        });
+      }
       let value;
       if (descriptor.source === 'builtin'){
         const handler = getBuiltinHandler(descriptor.name);
@@ -77,6 +94,7 @@ export function createToolExecutor({ task, knowledge = null, signal = null, arti
           leaseEpoch: task.lease_epoch, signal,
         });
       } else if (descriptor.source === 'custom'){
+        assertSandboxProfileSupported(descriptor.sandbox_profile);
         const toolId = descriptor.tool_id || descriptor.name.slice('custom.'.length);
         const versionNo = Number(attemptNumber(descriptor));
         const versionRow = getCustomToolVersion(toolId, versionNo);
@@ -87,13 +105,27 @@ export function createToolExecutor({ task, knowledge = null, signal = null, arti
         const out = await runSandbox({
           mode: 'execute', code: versionRow.code, args,
           timeoutMs: Math.min(descriptor.timeout_ms || config.tools.timeoutMs, config.tools.timeoutMs),
+          sandboxProfile: descriptor.sandbox_profile,
+          signal, toolCallId, workerId, task,
         });
         value = out.result;
-        return normalizeToolResult({ status: 'succeeded', value, untrusted: true });
       } else if (descriptor.source === 'mcp'){
-        value = await callMcpTool({ task, descriptor, args, signal });
+        value = await callMcpTool({ task, descriptor, args, signal, idempotencyKey });
       } else {
         throw new ToolRunError('tool_unavailable', '未知工具来源');
+      }
+      const after = await injectFault('tool.after_execute', {
+        task, tool_name: descriptor.name, signal, tool_call_id: toolCallId,
+      });
+      if (after?.result?.kind === 'empty'){
+        value = '';
+      } else if (after?.result?.kind === 'malformed'){
+        value = '{"type":';
+      } else if (after?.result?.kind === 'http_status'){
+        return normalizeToolResult({
+          status: 'failed', errorCode: 'fault_http_status',
+          errorMessage: `注入工具 HTTP ${after.result.status}`,
+        });
       }
       return normalizeToolResult({ status: 'succeeded', value, untrusted: true });
     } catch (e){

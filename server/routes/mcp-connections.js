@@ -11,6 +11,7 @@ import {
   upsertCachedTools, listCachedTools, touchConnectionHealth, McpConnectionError,
 } from '../control/mcp-repo.js';
 import { listMcpTools } from '../tools/mcp-client.js';
+import { assertMcpEndpoint } from '../tools/egress-policy.js';
 import {
   upsertToolRegistry, getToolRegistryRow, listToolRegistry,
   deleteMcpToolsForConnection,
@@ -36,6 +37,7 @@ function safeConnection(c){
     id: c.id, name: c.name, transport: c.transport, endpoint: c.endpoint,
     auth_type: c.auth_type, credential_configured: !!c.credential_ref,
     allowed_tools: c.allowed_tools || [], denied_tools: c.denied_tools || [],
+    egress_allowlist: c.egress_allowlist || [],
     status: c.status, last_health_at: c.last_health_at,
     created_at: c.created_at, updated_at: c.updated_at,
   };
@@ -65,6 +67,7 @@ router.post('/', async (req, res) => {
       endpoint: b.endpoint, authType: b.auth_type || 'none',
       credentialRef: b.credential_ref || '',
       allowedTools: b.allowed_tools || [], deniedTools: b.denied_tools || [],
+      egressAllowlist: b.egress_allowlist || [],
     });
     await auditSafe({
       tenantId, actorType: 'user', actorId: req.user.id, action: 'mcp.connection.created',
@@ -89,7 +92,7 @@ router.patch('/:id', async (req, res) => {
     const tenantId = await resolveTenantId(req.user.id);
     const b = req.body || {};
     const patch = {};
-    for (const key of ['endpoint', 'auth_type', 'credential_ref', 'allowed_tools', 'denied_tools', 'status']){
+    for (const key of ['endpoint', 'auth_type', 'credential_ref', 'allowed_tools', 'denied_tools', 'status', 'egress_allowlist']){
       if (b[key] !== undefined) patch[key] = b[key];
     }
     const connection = await updateConnection({ tenantId, id: req.params.id, patch });
@@ -123,6 +126,7 @@ router.post('/:id/test', async (req, res) => {
     const connection = await getConnection({ tenantId, id: req.params.id });
     if (!connection) return err(res, 404, 'MCP 连接不存在');
     try {
+      await assertMcpEndpoint(connection);
       const tools = await listMcpTools({
         endpoint: connection.endpoint, credentialRef: connection.credential_ref,
       });
@@ -136,6 +140,7 @@ router.post('/:id/test', async (req, res) => {
 });
 
 async function refreshConnection(tenantId, connection, actorId){
+  await assertMcpEndpoint(connection);
   const discovered = await listMcpTools({
     endpoint: connection.endpoint, credentialRef: connection.credential_ref,
   });

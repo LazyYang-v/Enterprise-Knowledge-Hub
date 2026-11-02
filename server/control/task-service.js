@@ -5,6 +5,7 @@ import {
   getTask,
   getTaskForUpdate,
   listTasks as repoListTasks,
+  listTaskCounts as repoListTaskCounts,
   transitionTask,
   appendEvent,
   SQL_NOW,
@@ -18,6 +19,7 @@ import {
 import { withTransaction, getPool } from './pg.js';
 import { countEvidence } from './evidence-repo.js';
 import { listArtifacts } from './artifact-repo.js';
+import { cleanupRateLimitCounters } from './rate-limit.js';
 
 export class TaskValidationError extends Error {
   constructor(message){
@@ -87,6 +89,21 @@ function assertGoal(goal){
 }
 
 const KB_SCOPE_MODES = new Set(['visible', 'explicit', 'preset', 'none']);
+const TASK_STATUSES = new Set([
+  'queued', 'running', 'waiting_approval', 'waiting_input', 'retry_wait',
+  'cancel_requested', 'completed', 'failed', 'cancelled',
+]);
+const APPROVAL_STATUSES = new Set(['pending', 'approved', 'denied', 'expired', 'cancelled']);
+
+function normalizeStatusFilter(raw){
+  if (raw == null || raw === '') return null;
+  const values = Array.isArray(raw) ? raw : String(raw).split(',');
+  const statuses = [...new Set(values.map(v => String(v).trim()).filter(Boolean))];
+  for (const status of statuses){
+    if (!TASK_STATUSES.has(status)) throw new TaskValidationError(`status 不合法：${status}`);
+  }
+  return statuses.length ? statuses : null;
+}
 
 function normalizeKbScope(raw){
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new TaskValidationError('kb_scope 必须是对象');
@@ -271,12 +288,18 @@ export class TaskService {
     return task;
   }
 
-  async listTasks({ tenantId, ownerId, limit = 20, cursor = null }){
-    const rows = await repoListTasks(tenantId, ownerId, { limit, cursor });
+  async listTasks({ tenantId, ownerId, limit = 20, cursor = null, status = null, q = null }){
+    const statuses = normalizeStatusFilter(status);
+    const safeQuery = q == null ? null : String(q).trim().slice(0, 200) || null;
+    const rows = await repoListTasks(tenantId, ownerId, {
+      limit, cursor, statuses, q: safeQuery,
+    });
     const last = rows[rows.length - 1];
+    const counts = await repoListTaskCounts(tenantId, ownerId, { q: safeQuery });
     return {
       tasks: rows,
       next_cursor: rows.length === limit && last ? `${last.created_at.toISOString()}|${last.id}` : null,
+      counts,
     };
   }
 
@@ -357,6 +380,7 @@ export class TaskService {
       },
       budget: task.budget_json,
       last_event_seq: task.event_seq,
+      result_summary: task.result_summary || null,
       checkpoint_step: checkpoint ? Number(checkpoint.step_seq) : 0,
       last_error: task.last_error_code ? { code: task.last_error_code, detail: task.last_error_detail } : null,
       recovery_count: task.recovery_count,
@@ -526,18 +550,49 @@ export class TaskService {
     });
   }
 
-  async listApprovals({ tenantId, taskId = null, status = 'pending', ownerId = null, limit = 50 }){
-    const params = [tenantId, status];
-    let where = 'a.tenant_id = $1 AND a.status = $2';
-    if (taskId){ params.push(taskId); where += ` AND a.task_id = $${params.length}`; }
-    if (ownerId){ params.push(ownerId); where += ` AND t.owner_id = $${params.length}`; }
-    params.push(Math.min(Math.max(limit, 1), 100));
+  async listApprovals({
+    tenantId, taskId = null, status = 'pending', ownerId = null,
+    userId = ownerId, isAdmin = false, limit = 50,
+  }){
+    if (status != null && status !== '' && !APPROVAL_STATUSES.has(String(status))){
+      throw new TaskValidationError('status 不合法');
+    }
+    const params = [tenantId];
+    const where = ['a.tenant_id = $1'];
+    if (status != null && status !== ''){
+      params.push(String(status));
+      where.push(`a.status = $${params.length}`);
+    }
+    if (taskId){
+      params.push(taskId);
+      where.push(`a.task_id = $${params.length}`);
+    }
+    if (ownerId){
+      params.push(ownerId);
+      where.push(`t.owner_id = $${params.length}`);
+    }
+    params.push(Math.min(Math.max(Number(limit) || 50, 1), 100));
     const r = await getPool().query(
-      `SELECT a.* FROM agent_approvals a JOIN agent_tasks t ON t.tenant_id = a.tenant_id AND t.id = a.task_id
-        WHERE ${where} ORDER BY a.created_at DESC LIMIT $${params.length}`,
+      `SELECT a.*,
+              t.title AS task_title, t.status AS task_status, t.owner_id AS task_owner_id,
+              c.tool_name, c.tool_version, c.side_effect, c.args_json, c.idempotency_key
+         FROM agent_approvals a
+         JOIN agent_tasks t ON t.tenant_id = a.tenant_id AND t.id = a.task_id
+         LEFT JOIN agent_tool_calls c ON c.tenant_id = a.tenant_id AND c.id = a.tool_call_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY a.created_at DESC LIMIT $${params.length}`,
       params,
     );
-    return r.rows;
+    const now = Date.now();
+    return r.rows.map(row => ({
+      ...row,
+      arguments: row.args_json || null,
+      request: row.request_payload_json || null,
+      can_decide: row.status === 'pending'
+        && (!row.expires_at || new Date(row.expires_at).getTime() > now)
+        && row.requested_by !== userId
+        && (row.task_owner_id === userId || isAdmin),
+    }));
   }
 
   /**
@@ -744,6 +799,13 @@ export class TaskService {
       }
       return n;
     });
+
+    // 5. 限流窗口清理（失败不影响回收）
+    try {
+      stats.rate_limit_cleaned = await cleanupRateLimitCounters();
+    } catch {
+      stats.rate_limit_cleaned = 0;
+    }
 
     return stats;
   }

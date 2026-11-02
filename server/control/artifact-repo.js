@@ -124,6 +124,70 @@ export async function listArtifacts({ tenantId, taskId, includeDeleted = false, 
   return r.rows.map(artifactMeta);
 }
 
+function likePattern(value){
+  return `%${String(value).replace(/[\\%_]/g, ch => `\\${ch}`)}%`;
+}
+
+/**
+ * 跨任务成果列表（产物库）。管理员可见本租户全部，普通用户只看自己任务；
+ * 只返回元数据，绝不返回 storage_key。游标为 (created_at, id) 降序。
+ */
+export async function listArtifactsForUser({
+  tenantId, ownerId, isAdmin = false, limit = 50, cursor = null,
+  kind = null, q = null, taskId = null,
+} = {}){
+  const params = [tenantId, ownerId, !!isAdmin];
+  const where = [
+    'a.tenant_id = $1',
+    'a.deleted_at IS NULL',
+    '($3::boolean OR t.owner_id = $2)',
+  ];
+  if (taskId){
+    if (!isArtifactId(taskId)) return { artifacts: [], next_cursor: null };
+    params.push(taskId);
+    where.push(`a.task_id = $${params.length}::uuid`);
+  }
+  if (kind){
+    params.push(kind);
+    where.push(`a.kind = $${params.length}`);
+  }
+  if (q){
+    params.push(likePattern(q));
+    where.push(`a.name ILIKE $${params.length} ESCAPE '\\'`);
+  }
+  if (cursor){
+    params.push(cursor.createdAt, cursor.id);
+    where.push(`(a.created_at, a.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+  }
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  params.push(safeLimit + 1);
+  const r = await getPool().query(
+    `SELECT a.id, a.task_id, a.step_id, a.name, a.kind, a.version, a.visibility,
+            a.download_policy, a.created_by, a.created_at, a.deleted_at,
+            b.sha256, b.size_bytes, b.mime,
+            t.title AS task_title, t.status AS task_status, t.owner_id AS task_owner_id
+       FROM artifacts a
+       JOIN artifact_blobs b ON b.id = a.blob_id
+       JOIN agent_tasks t ON t.tenant_id = a.tenant_id AND t.id = a.task_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY a.created_at DESC, a.id DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  const hasMore = r.rows.length > safeLimit;
+  const rows = hasMore ? r.rows.slice(0, safeLimit) : r.rows;
+  const last = rows[rows.length - 1];
+  return {
+    artifacts: rows.map(row => ({
+      ...artifactMeta(row),
+      task_title: row.task_title,
+      task_status: row.task_status,
+      task_owner_id: row.task_owner_id,
+    })),
+    next_cursor: hasMore && last ? `${iso(last.created_at)}|${last.id}` : null,
+  };
+}
+
 export async function getArtifact({ tenantId, taskId, artifactId, includeDeleted = false }){
   if (!isArtifactId(artifactId)) return null;
   const r = await getPool().query(

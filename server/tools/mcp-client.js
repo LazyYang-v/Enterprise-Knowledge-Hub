@@ -6,6 +6,11 @@ import { connectionForToolName, touchConnectionHealth } from '../control/mcp-rep
 import { ToolRunError } from './result.js';
 import { schemaHashFor } from './contract.js';
 import { assertSchemaDefinition } from './schema.js';
+import { assertEgressTarget } from '../net/ssrf.js';
+import { assertMcpEndpoint } from './egress-policy.js';
+import { injectFault, selectFault, recordFaultEvent } from '../testing/fault-injection.js';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const PROTOCOL_VERSION = '2025-03-26';
 const CLIENT_INFO = Object.freeze({ name: 'enterprise-knowledge-hub', version: '1.0.0' });
@@ -42,22 +47,30 @@ async function readRpcResponse(res, expectedId){
   return json;
 }
 
-async function postRpc({ endpoint, credential, sessionId, payload, timeoutMs }){
+async function postRpc({ endpoint, credential, sessionId, payload, timeoutMs, signal = null, extraHeaders = {} }){
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
     'MCP-Protocol-Version': PROTOCOL_VERSION,
     ...authHeaders(credential),
+    ...extraHeaders,
   };
   if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+  if (signal?.aborted) throw new ToolRunError('mcp_aborted', 'MCP 调用已取消', { retryable: false });
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   let res;
   try {
     res = await fetch(endpoint, {
       method: 'POST', headers, body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: combined, redirect: 'manual',
     });
   } catch (e){
+    if (signal?.aborted) throw new ToolRunError('mcp_aborted', 'MCP 调用已取消', { retryable: false });
     throw new ToolRunError('mcp_unavailable', `MCP 连接失败：${e?.name === 'TimeoutError' ? '超时' : e.message}`, { retryable: true });
+  }
+  if (res.status >= 300 && res.status < 400){
+    throw new ToolRunError('mcp_redirect_denied', 'MCP 服务返回重定向，已拒绝', { retryable: false });
   }
   if (!res.ok){
     throw new ToolRunError('mcp_unavailable', `MCP 服务返回 ${res.status}`, { retryable: res.status >= 500 });
@@ -66,16 +79,28 @@ async function postRpc({ endpoint, credential, sessionId, payload, timeoutMs }){
 }
 
 /** 建立一次性 MCP 会话并执行 fn(client)。 */
-export async function withMcpSession({ endpoint, credentialRef = '', timeoutMs = config.mcp.clientTimeoutMs } = {}, fn){
+export async function withMcpSession({
+  endpoint, credentialRef = '', timeoutMs = config.mcp.clientTimeoutMs,
+  signal = null, extraHeaders = {},
+} = {}, fn){
   if (!/^https?:\/\//i.test(String(endpoint || ''))){
     throw new ToolRunError('mcp_invalid_endpoint', 'MCP endpoint 必须是 http/https URL');
+  }
+  try {
+    await assertEgressTarget(endpoint, {
+      allowPrivate: config.mcp.allowPrivateHosts,
+      allowMetadata: config.mcp.allowMetadataHosts,
+      allowlist: config.mcp.egressAllowlist,
+    });
+  } catch (e){
+    throw new ToolRunError('mcp_egress_denied', e.message, { retryable: false });
   }
   let credential;
   try { credential = resolveCredentialRef(credentialRef); }
   catch (e){ throw new ToolRunError('mcp_credential_unavailable', e.message); }
 
   const init = await postRpc({
-    endpoint, credential, timeoutMs,
+    endpoint, credential, timeoutMs, signal, extraHeaders,
     payload: {
       jsonrpc: '2.0', id: 1, method: 'initialize',
       params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: CLIENT_INFO },
@@ -87,15 +112,16 @@ export async function withMcpSession({ endpoint, credentialRef = '', timeoutMs =
 
   // initialized 通知没有响应体；部分服务要求必须发送。
   await postRpc({
-    endpoint, credential, sessionId, timeoutMs,
+    endpoint, credential, sessionId, timeoutMs, signal, extraHeaders,
     payload: { jsonrpc: '2.0', method: 'notifications/initialized' },
   }).catch(() => {});
 
   let id = 2;
   return fn({
     async request(method, params){
+      if (signal?.aborted) throw new ToolRunError('mcp_aborted', 'MCP 调用已取消', { retryable: false });
       const res = await postRpc({
-        endpoint, credential, sessionId, timeoutMs,
+        endpoint, credential, sessionId, timeoutMs, signal, extraHeaders,
         payload: { jsonrpc: '2.0', id: id++, method, params },
       });
       const msg = await readRpcResponse(res, id - 1);
@@ -107,8 +133,8 @@ export async function withMcpSession({ endpoint, credentialRef = '', timeoutMs =
   });
 }
 
-export async function listMcpTools({ endpoint, credentialRef = '', timeoutMs } = {}){
-  return withMcpSession({ endpoint, credentialRef, timeoutMs }, async client => {
+export async function listMcpTools({ endpoint, credentialRef = '', timeoutMs, signal = null } = {}){
+  return withMcpSession({ endpoint, credentialRef, timeoutMs, signal }, async client => {
     const result = await client.request('tools/list', {});
     const tools = Array.isArray(result?.tools) ? result.tools : [];
     const out = [];
@@ -129,24 +155,54 @@ export async function listMcpTools({ endpoint, credentialRef = '', timeoutMs } =
   });
 }
 
-export async function callMcpTool({ task, descriptor, args, signal = null }){
+export async function callMcpTool({ task, descriptor, args, signal = null, idempotencyKey = null }){
   const { connection, tool } = await connectionForToolName({
     tenantId: task.tenant_id, toolName: descriptor.name,
   }) || {};
   if (!connection) throw new ToolRunError('mcp_connection_missing', 'MCP 连接不存在');
   if (connection.status !== 'active') throw new ToolRunError('mcp_unavailable', 'MCP 连接未启用', { retryable: true });
+  try {
+    await assertMcpEndpoint(connection);
+  } catch (e){
+    throw new ToolRunError('mcp_egress_denied', e.message, { retryable: false });
+  }
   const allowed = Array.isArray(connection.allowed_tools) ? connection.allowed_tools : [];
   const denied = Array.isArray(connection.denied_tools) ? connection.denied_tools : [];
   if (denied.includes(tool) || (allowed.length && !allowed.includes(tool))){
     throw new ToolRunError('mcp_tool_denied', 'MCP 工具不在连接允许列表内');
   }
-  if (signal?.aborted) throw new ToolRunError('mcp_aborted', 'MCP 调用已取消');
+  if (signal?.aborted) throw new ToolRunError('mcp_aborted', 'MCP 调用已取消', { retryable: false });
   try {
-    const result = await withMcpSession({
+    const pre = await injectFault('mcp.before_send', {
+      task, tool_name: descriptor.name, signal,
+    });
+    if (pre?.result?.kind === 'http_status'){
+      throw new ToolRunError('mcp_unavailable', `注入 MCP HTTP ${pre.result.status}`, { retryable: true });
+    }
+    let result = await withMcpSession({
       endpoint: connection.endpoint,
       credentialRef: connection.credential_ref,
       timeoutMs: descriptor.timeout_ms || config.mcp.clientTimeoutMs,
-    }, client => client.request('tools/call', { name: tool, arguments: args }));
+      signal,
+      extraHeaders: idempotencyKey ? { 'Idempotency-Key': String(idempotencyKey) } : {},
+    }, client => client.request('tools/call', {
+      name: tool,
+      arguments: args,
+      ...(idempotencyKey ? { _meta: { idempotency_key: String(idempotencyKey) } } : {}),
+    }));
+    // 效果已发生、响应未返回：用于验证 provider 幂等恢复。
+    const afterFault = selectFault('mcp.after_send_before_read', {
+      task, tool_name: descriptor.name,
+    });
+    if (afterFault){
+      await recordFaultEvent({ task, fault: afterFault });
+      if (['throw', 'drop_response', 'http_status'].includes(afterFault.action)){
+        throw new ToolRunError('mcp_unavailable', 'MCP 响应丢失（注入）', { retryable: true });
+      }
+      if (afterFault.action === 'empty') result = { ...result, content: [] };
+      else if (afterFault.action === 'malformed') result = { ...result, content: [{ type: 'text', text: '{"result":' }] };
+      else if (afterFault.action === 'delay') await sleep(afterFault.delay_ms || 1000);
+    }
     await touchConnectionHealth({ connectionId: connection.id, ok: true });
     const parts = [];
     for (const item of result?.content || []){

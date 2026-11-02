@@ -39,7 +39,7 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
 
-## P0-0 … P0-5：测试、Runtime、任务、知识、工具与成果面
+## P0-0 … P0-6：测试、Runtime、任务、知识、工具、成果与评测
 
 本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成：
 
@@ -88,9 +88,9 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 - 出站 MCP Streamable HTTP 客户端与连接/工具缓存；入站 `service_principals` 哈希令牌 + KB scope
 - `model_profiles` + `credential_ref`：PlatformAdmin 管理，密钥不回显；`base_url` 拒绝私网/元数据地址
 - 新 API：`/api/tools/registry`、`/api/mcp/connections`、`/api/model-profiles`、`/api/service-principals`
-- 前端「任务」工作台：创建任务、SSE 事件时间线、计划/工具/证据/用量、审批（展示真实调用参数）与输入、取消/恢复/补充指令
-- 系统设置新增「Agent 平台」：工具注册表策略、MCP 连接、平台模型、服务主体；入口按 PlatformAdmin / 组织管理员权限显示
-- `/api/auth/me` 返回 `is_platform_admin` / `is_admin`，前端据此隐藏无权操作
+- 前端「任务」控制台：创建任务、SSE 事件流、计划/工具/证据/用量、审批（展示真实调用参数）与输入、取消/恢复/补充指令
+- 独立「管理」控制台：工具注册表（启停/策略）、MCP 连接、平台模型、服务主体与 Skills；入口按 PlatformAdmin / 组织管理员权限显示
+- `/api/auth/me` 返回 `is_platform_admin` / `is_admin` 与 `platform` 元信息，前端据此隐藏无权操作
 
 **P0-5 成果面与基础文件工具**
 
@@ -104,6 +104,21 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 - 前端任务详情新增「成果」卡：列表、下载、上传附件、删除；新建任务可选附件
 - 关闭 S-09（成果路径遍历与未授权下载）；`spreadsheet-audit` 升至 1.1.0 并可选
 
+**P0-6 容器沙箱、限流、故障注入与评测**
+
+- 沙箱后端显式选择：`EKH_TOOL_SANDBOX_MODE=process|required|container|off`，默认 `process`
+- `container` 只走 Docker，失败关闭（不回退进程沙箱）：`--network=none`、只读根、非 root uid 10001、`cap-drop=ALL`、`no-new-privileges`、pids/memory/cpu/ulimit、tmpfs
+- `sandbox_profile` 运行时生效并纳入漂移校验：`read_only`/`workspace_write`/`code_exec`；`browser` 未实现、`network_allowlist` 只用于 MCP
+- 活动沙箱注册表：abort、超时、Worker 停机统一杀进程组/容器；`npm run sandbox:cleanup` 清理残留
+- MCP 出网默认拒绝私网/元数据/userinfo/3xx；连接 CRUD 与每次调用都校验；本机 mock 需显式 `EKH_MCP_ALLOW_PRIVATE_HOSTS=1`
+- provider 幂等键 `sha256(tenant+task+tool+args_hash)`，写入 `Idempotency-Key` 与 `_meta.idempotency_key`；Worker 崩溃后同一逻辑调用可复用并按 attempt 递增
+- per-tenant 固定窗口限流（`task_create`/`model_call`/`tool_call`）：PostgreSQL 原子计数、429 + `Retry-After`、默认 fail-closed
+- 五类预算硬检查（steps/wall/tool/model/tokens）；耗尽先写 `budget-report.json` 与 `budget.exhausted` 事件
+- provider 返回 `usage` 时记录真实 token，缺失时估算并标记 `token_estimated=true`
+- 确定性故障注入默认关闭且生产禁用；支持 delay/hang/throw/kill_self/empty/malformed/http_status/drop_response
+- 评测运行器 `scripts/evals/run-p0.js`：假模型冒烟 + 真实模型基线，结构指标自动计算，语义指标诚实留空并输出人工复核 CSV
+- 前端控制台：Hash 路由深链（`#/tasks/:id`、`#/approvals`、`#/artifacts`、`#/admin/*`）、统一产物库与安全预览、审批收件箱、响应式侧栏与键盘可访问性；任务/审批/产物/管理按新模块加载，知识库/对话/智能体/共享空间保留原实现
+
 ```bash
 npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
 npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
@@ -112,14 +127,21 @@ npm run db:migrate       # 再执行一次应为幂等
 npm run test:pg          # 需 DATABASE_URL 指向 *_test 数据库（含 kill 恢复测试）
 npm run worker           # 另开终端：领取 Agent 任务（需 AGENT_PLATFORM_ENABLED=1）
 npm run artifacts:gc -- --dry-run   # 成果 blob GC 演练
+npm run sandbox:build    # 构建容器沙箱镜像 ekh-sandbox:1
+npm run sandbox:cleanup -- --dry-run # 清理残留沙箱容器演练
+npm run eval:p0:dry      # 评测语料/运行器自检（不连数据库）
+npm run eval:p0:fake -- --tasks T25,T26,T27,T28,T29,T30  # 假模型确定性冒烟
+npm run eval:p0:real -- --tasks all --seed 42           # 真实模型基线（需 EKH_AGENT_MODEL_*）
 npm run repro:baseline   # 生成当前行为快照（会覆盖 docs/baseline）
 ```
+
+评测运行器只接受 `*_test` 数据库，数据目录必须是 `/tmp` 下新建目录；结果写入 `evals/p0/results/<run-id>/`（已 gitignore）。真实模型密钥只从环境读取，报告不记录密钥。
 
 P0-2 起的任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`），或在预设中配置 `model_profile_id`。平台管理员通过 `PLATFORM_ADMIN_EMAILS` 指定。
 
 > Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`（SQLite 知识面 + `artifacts/` 成果 blob）。首次对现有 `data/app.db` 运行新代码前请先备份；SQLite 迁移只增列/表，但备份是回滚前提。
 
-详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`、`0005-p0-4-tools-approvals-sandbox-mcp.md`、`0006-p0-5-artifacts-file-tools.md`。
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`、`0005-p0-4-tools-approvals-sandbox-mcp.md`、`0006-p0-5-artifacts-file-tools.md`、`0007-p0-6-sandbox-evals-rate-limit.md`。
 
 
 ## 配置模型
@@ -154,15 +176,19 @@ P0-2 起的任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_N
 │   ├── skills/            Skill manifest 校验、Registry、密钥扫描
 │   ├── llm.js             OpenAI 兼容客户端（流式对话 / Embeddings）
 │   ├── custom-tools.js    自定义工具：上传 JS 的沙箱解析与执行
-│   ├── control/           PostgreSQL 控制面（任务/证据/审计/预设/Skill 仓储）
+│   ├── control/           PostgreSQL 控制面（任务/证据/审计/预算/限流/预设/Skill 仓储）
+│   ├── net/               SSRF 判定与出网目标校验
+│   ├── testing/           确定性故障注入（生产禁用）
 │   ├── seed-demo.js       演示数据
 │   └── routes/            kbs、chat、agents、orgs、misc、tasks、knowledge、skills
+├── docker/sandbox/        容器沙箱镜像（node:24-bookworm-slim，非 root）
 ├── skills/                内置 Skill（manifest/instructions/references/evals）
-├── migrations/            控制面 SQL 迁移（P0-0 起，P0-3 为 0003）
+├── migrations/            控制面 SQL 迁移（P0-6 为 0006）
 ├── test/                  node:test 单元、集成、PostgreSQL 测试
-├── scripts/               迁移 CLI、C1–C8 基线复现
+├── scripts/               迁移 CLI、基线复现、沙箱清理、评测 runner
+│   └── evals/             corpus/假模型/scorer/run-p0
 ├── docs/                  威胁模型、数据分类、保留策略、ADR、Runbook、基线报告
-├── evals/                 30 条评测任务与 3 个 E2E 场景（P0-0 定义）
+├── evals/                 30 条评测任务、3 个 E2E 场景与 P0-6 corpus（P0-0 定义）
 ├── public/                前端（原生 HTML/CSS/JS，无构建步骤）
 │   ├── index.html         应用骨架
 │   ├── styles.css         主题变量 + 全部样式（源自 WeKnora 主题）

@@ -124,12 +124,23 @@ export async function resolveTools({ tenantId, ownerId, refs = null } = {}){
   return out;
 }
 
+/** 执行相关字段必须与快照一致，避免管理员改 profile/幂等/超时后静默换语义。 */
+function executionFieldsMatch(snapshot, current){
+  for (const key of ['side_effect', 'idempotency', 'resource_scope', 'sandbox_profile']){
+    if (snapshot[key] != null && current[key] != null && snapshot[key] !== current[key]) return false;
+  }
+  if (snapshot.timeout_ms != null && current.timeout_ms != null
+    && Number(snapshot.timeout_ms) !== Number(current.timeout_ms)) return false;
+  return true;
+}
+
 /** 执行阶段按快照重新解析；版本/哈希漂移即拒绝执行。 */
 export async function resolvePinned({ tenantId, ownerId, snapshot } = {}){
   const name = String(snapshot?.name || '');
   if (BUILTIN_NAMES.has(name)){
     const current = normalizeToolDescriptor({ ...builtinDescriptor(name), enabled: true });
-    if (snapshot.version !== current.version || snapshot.schema_hash !== current.schema_hash){
+    if (snapshot.version !== current.version || snapshot.schema_hash !== current.schema_hash
+      || !executionFieldsMatch(snapshot, current)){
       throw new ToolDriftError(`内置工具定义已变化：${name}`);
     }
     return current;
@@ -147,7 +158,8 @@ export async function resolvePinned({ tenantId, ownerId, snapshot } = {}){
       throw new ToolDriftError(`工具代码已变化：${name}@${snapshot.version}`, 'tool_code_changed');
     }
     const current = descriptorForCustom(row, versionRow);
-    if (current.schema_hash !== snapshot.schema_hash || current.version !== snapshot.version){
+    if (current.schema_hash !== snapshot.schema_hash || current.version !== snapshot.version
+      || !executionFieldsMatch(snapshot, current)){
       throw new ToolDriftError(`工具定义已变化：${name}`);
     }
     return current;
@@ -159,24 +171,29 @@ export async function resolvePinned({ tenantId, ownerId, snapshot } = {}){
     if (row.schema_hash !== snapshot.schema_hash){
       throw new ToolDriftError(`MCP 工具定义已变化：${name}`);
     }
-    return descriptorFromRegistryRow(row);
+    const current = descriptorFromRegistryRow(row);
+    if (!executionFieldsMatch(snapshot, current)){
+      throw new ToolDriftError(`MCP 工具执行属性已变化：${name}`);
+    }
+    return current;
   }
   throw new ToolDriftError(`未知工具：${name}`, 'tool_not_found');
 }
 
 /** 列出用户可见的工具（工具箱/注册表 API）。 */
-export async function listForUser({ tenantId, userId, isAdmin = false } = {}){
+export async function listForUser({ tenantId, userId, isAdmin = false, includeDisabled = false } = {}){
   const builtins = builtinDescriptors().map(d => normalizeToolDescriptor({ ...d, enabled: true }));
   const customs = listCustomTools({ ownerId: userId, includeAll: isAdmin })
     .filter(t => !t.deleted_at)
     .map(t => ({ ...descriptorForCustom(t), owner_id: t.owner_id }));
   let mcp = [];
   try {
-    const rows = await listToolRegistry({ tenantId });
+    const rows = await listToolRegistry({ tenantId, includeDisabled: !!includeDisabled });
     mcp = rows.filter(r => r.source === 'mcp').map(r => ({
       ...descriptorFromRegistryRow(r),
       connection_name: String(r.name).split('.')[1] || '',
       untrusted_description: true,
+      owner_id: r.owner_id || '',
     }));
   } catch (e){
     // 注册表 API 在 PG 不可用时只返回本地工具，不阻断工具箱。

@@ -1,4 +1,4 @@
-# P0 运行手册（P0-0 … P0-4）
+# P0 运行手册（P0-0 … P0-6）
 
 ## 1. 前置条件
 
@@ -207,6 +207,7 @@ curl -s -X POST http://localhost:3210/api/skills/reload \
 | `EKH_WORKER_POLL_MS` | `1000` | 空队列轮询间隔 |
 | `EKH_TASK_RETRY_BASE_MS` | `5000` | 重试退避基数 |
 | `EKH_WORKER_SHUTDOWN_GRACE_MS` | `10000` | 优雅停机等待上限 |
+| `EKH_WORKER_TENANT_ID` | 空 | 只领取指定租户任务；空表示全部租户（评测隔离用） |
 | `TAVILY_API_KEY` | 空 | 网络搜索工具 |
 
 `.env` 不会被自动加载；可使用 `node --env-file=.env server/index.js`，或直接导出环境变量。
@@ -334,7 +335,111 @@ npm run artifacts:gc -- --grace-ms=0       # 立即清理（仅测试/维护）
 - 备份：除 PostgreSQL 外，必须同时备份 `data/artifacts`；恢复时保持目录与数据库一致。
 - 删除是软删除；下载/列表立即不可见。法律保留优先于 GC。
 
-## 12. CI
+## 12. P0-6 沙箱、限流、故障注入与评测
+
+### 容器沙箱
+
+```bash
+npm run sandbox:build                       # docker build -t ekh-sandbox:1 -f docker/sandbox/Dockerfile .
+EKH_TOOL_SANDBOX_MODE=container npm run worker
+```
+
+- 默认 `process`，现有部署无需 Docker。
+- `container` 在 Worker 启动时预检 Docker 与镜像；任一不可用直接失败，不会回退。
+- 运行参数固定 `--network=none --read-only --user 10001:10001 --cap-drop=ALL --no-new-privileges` + pids/memory/cpu/ulimit；`workspace_write` 只挂 `/workspace` tmpfs。
+- abort/超时/停机杀容器；容器内 `EKH_SANDBOX_HARD_TIMEOUT_MS` 兜底。
+- 清理残留（先列出，确认后 `--force`）：
+
+```bash
+npm run sandbox:cleanup
+node scripts/cleanup-sandboxes.js --force --older-than-min=60
+```
+
+### MCP 出网
+
+- 默认拒绝 `127.0.0.1`/私网/元数据地址与 userinfo；本机 mock 显式 `EKH_MCP_ALLOW_PRIVATE_HOSTS=1`。
+- 连接级 `egress_allowlist` 优先于 `EKH_MCP_EGRESS_ALLOWLIST`；3xx 一律拒绝。
+- 外部写工具使用 `provider_key` 幂等，键跨 Worker 恢复稳定。
+
+### 限流
+
+```bash
+# 单租户覆盖（示例：任务创建 10/min）
+psql "$DATABASE_URL" -c "INSERT INTO tenant_rate_limits(tenant_id,bucket,max_requests,window_ms)
+  VALUES ('<tenant>','task_create',10,60000)
+  ON CONFLICT (tenant_id,bucket) DO UPDATE SET max_requests=10, window_ms=60000;"
+```
+
+- 429 带 `Retry-After`；模型超限 → `retry_wait/model_rate_limited`；工具超限 → 非致命 `rate_limited`。
+- 默认 fail-closed；排障时可临时 `EKH_RATE_LIMIT_FAIL_OPEN=1`，并监控 `rate_limit.unavailable` 审计。
+
+### 故障注入（仅测试/演练）
+
+```bash
+EKH_FAULT_INJECTION=1 \
+EKH_FAULT_CONFIG='[{"point":"model.before_call","action":"delay","delay_ms":500,"times":1}]' \
+EKH_FAULT_SEED=42 npm run worker
+```
+
+- 生产环境显式开启会启动失败，除非同时 `EKH_FAULT_ALLOW_PRODUCTION=1`（不建议）。
+- `fault.injected` 事件只记录点/动作/seed/序号。
+
+### 评测
+
+```bash
+# 语料计划（无需数据库）
+npm run eval:p0:dry -- --tasks=T25-T30
+
+# fake 链路验证（必须 *_test 数据库；数据目录由 runner 创建在 /tmp）
+EKH_DATA_DIR="$(mktemp -d /tmp/ekh-eval-XXXXXX)" \
+DATABASE_URL='postgres://ekh:ekh_dev_password@127.0.0.1:55432/ekh_test' \
+npm run eval:p0:fake -- --tasks=T25,T26,T27,T28,T29,T30
+
+# 真实模型基线（密钥只从环境读取）
+EKH_DATA_DIR="$(mktemp -d /tmp/ekh-eval-real-XXXXXX)" \
+DATABASE_URL='postgres://ekh:ekh_dev_password@127.0.0.1:55432/ekh_test' \
+EKH_AGENT_MODEL_BASE_URL='https://...' EKH_AGENT_MODEL_NAME='...' EKH_AGENT_MODEL_API_KEY='...' \
+npm run eval:p0:real -- --tasks=all --seed=42
+```
+
+结果在 `evals/p0/results/<run-id>/`；语义引用准确率/无依据断言率保持 `null`，用 `citation-review.csv` 人工复核。
+
+### 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `EKH_TOOL_SANDBOX_MODE` | `process` | `process/required/container/off`；`container` 失败关闭 |
+| `EKH_SANDBOX_IMAGE` | `ekh-sandbox:1` | 容器镜像 |
+| `EKH_SANDBOX_PIDS_LIMIT` / `_CPU_LIMIT` | `64` / `0.5` | 容器 pids / CPU |
+| `EKH_SANDBOX_TMPFS_MB` / `_WORKSPACE_MB` | `64` / `16` | tmpfs 大小 |
+| `EKH_MCP_ALLOW_PRIVATE_HOSTS` | `0` | 仅测试/内网显式放开 |
+| `EKH_MCP_EGRESS_ALLOWLIST` | 空 | 全局主机 allowlist |
+| `EKH_RATE_LIMIT_ENABLED` | `1` | 租户限流总开关 |
+| `EKH_RATE_LIMIT_FAIL_OPEN` | `0` | DB 故障时是否放行 |
+| `EKH_RATE_TASK_CREATE_LIMIT` / `_WINDOW_MS` | `30` / `60000` | 任务创建桶 |
+| `EKH_RATE_MODEL_CALL_LIMIT` / `_WINDOW_MS` | `120` / `60000` | 模型调用桶 |
+| `EKH_RATE_TOOL_CALL_LIMIT` / `_WINDOW_MS` | `120` / `60000` | 工具调用桶 |
+| `EKH_FAULT_INJECTION` | `0` | 生产强制关闭 |
+| `EKH_FAULT_CONFIG` / `_FILE` | 空 | 故障 JSON 数组 |
+| `EKH_FAULT_SEED` | `1` | 确定性概率种子 |
+
+### 前端控制台
+
+P0-6 之后前端已切换为原生 ES Modules + Hash 路由，无构建步骤：
+
+| 路由 | 说明 | 权限 |
+|---|---|---|
+| `#/kbs`、`#/kbs/:id` | 知识库列表与详情（保留原视图） | 登录用户 |
+| `#/chat/new`、`#/chat/:id` | 新对话与会话深链 | 登录用户 |
+| `#/tasks`、`#/tasks/:id/:tab?` | 任务列表/详情；tab 支持 `overview/chat/events/plan/tools/evidence/artifacts` | `AGENT_PLATFORM_ENABLED=1` |
+| `#/approvals` | 审批收件箱（待审批/已通过/已拒绝/已过期/已取消） | 平台启用 |
+| `#/artifacts?source=all\|task\|chat&preview=:id` | 统一产物库与安全预览 | 平台启用 |
+| `#/admin/tools`、`#/admin/mcp` | 工具注册表启停/策略、MCP 连接与工具刷新 | `is_admin` |
+| `#/admin/models`、`#/admin/principals`、`#/admin/skills` | 平台模型、服务主体、Skills | `is_platform_admin` |
+
+验证方式：`npm start`（或带 `DATABASE_URL` + `AGENT_PLATFORM_ENABLED=1` 启动）后登录演示账号，检查深链刷新、任务 SSE 断线重连、审批批准/拒绝、产物预览与下载、管理端启停与一次性 token、900px 以下移动端侧栏与键盘 Tab/Esc。
+
+## 13. CI
 
 `.github/workflows/ci.yml`：
 
@@ -343,7 +448,7 @@ npm run artifacts:gc -- --grace-ms=0       # 立即清理（仅测试/维护）
 
 基线脚本不作为门禁。
 
-## 13. 常见问题
+## 14. 常见问题
 
 | 问题 | 处理 |
 |---|---|

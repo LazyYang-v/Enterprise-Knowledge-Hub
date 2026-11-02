@@ -32,8 +32,12 @@ export async function startFakeModel(responder){
         return;
       }
       const content = typeof out === 'string' ? out : (out?.content ?? '');
+      const usage = typeof out === 'object' ? out?.usage : null;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
+      res.end(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content } }],
+        ...(usage ? { usage } : {}),
+      }));
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

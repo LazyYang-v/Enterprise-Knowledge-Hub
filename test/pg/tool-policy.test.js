@@ -155,4 +155,34 @@ test('S-07：默认拒绝、策略/预算、工具漂移与归属', { skip }, as
     assert.equal(call.tool_version, '1.1.0');
     assert.equal(call.code_hash, badHash);
   });
+
+  await t.test('sandbox_profile 漂移必须拒绝执行', async () => {
+    const tool = createCustomTool({
+      ownerId: OWNER, name: 'profile工具', description: 'profile',
+      parameters: { type: 'object', properties: {} }, code: TOOL_CODE,
+    });
+    const name = customToolName(tool.id);
+    const task = await service.createTask({
+      tenantId, ownerId: OWNER, goal: 'profile 漂移', input: { tools: [`custom:${tool.id}`] },
+    });
+    const claimed = await claimNextTask({ workerId: 'w-profile', leaseTtlMs: 5000 });
+    assert.equal(claimed.id, task.id);
+    await getPool().query(
+      `UPDATE agent_tasks
+          SET input_json = jsonb_set(input_json, '{tools,0,sandbox_profile}', to_jsonb($3::text))
+        WHERE tenant_id = $1 AND id = $2`,
+      [tenantId, task.id, 'workspace_write'],
+    );
+    const model = await startFakeModel(({ call }) => (
+      call === 1 ? callTool(name) : finish('profile 漂移后完成')
+    ));
+    t.after(() => model.close());
+    const result = await executeTask(claimed, { workerId: 'w-profile', model, toolFactory });
+    assert.equal(result.status, 'completed');
+    const call = (await getPool().query(
+      'SELECT status, error_code FROM agent_tool_calls WHERE tenant_id = $1 AND task_id = $2', [tenantId, task.id],
+    )).rows[0];
+    assert.equal(call.status, 'failed');
+    assert.equal(call.error_code, 'tool_schema_mismatch');
+  });
 });

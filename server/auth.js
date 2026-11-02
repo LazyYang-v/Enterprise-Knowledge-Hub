@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from './db.js';
 import { $uuid, $token, hashPassword, verifyPassword, now, err } from './util.js';
 import { isPlatformAdmin, isAdminUser } from './auth/admin.js';
+import { config } from './config.js';
 
 export const authRequired = (req, res, next) => {
   const h = req.headers.authorization || '';
@@ -34,6 +35,16 @@ function publicUser(user){
     role: userRole(user),
     is_platform_admin: isPlatformAdmin(user),
     is_admin: isAdminUser(user),
+    platform: {
+      agent_platform_enabled: config.agentPlatformEnabled,
+      sandbox_mode: config.tools.sandboxMode,
+      artifact_limits: {
+        max_bytes: config.artifacts.maxBytes,
+        task_max_bytes: config.artifacts.taskMaxBytes,
+        max_per_task: config.artifacts.maxPerTask,
+        upload_max_bytes: config.artifacts.uploadMaxBytes,
+      },
+    },
   };
 }
 

@@ -20,7 +20,12 @@
     "worker:once": "node scripts/worker.js --once",
     "worker:reap": "node scripts/worker.js --reap-only",
     "artifacts:gc": "node scripts/artifacts-gc.js",
-    "repro:baseline": "node scripts/repro-c1-c8.js"
+    "repro:baseline": "node scripts/repro-c1-c8.js",
+    "sandbox:build": "docker build -t ekh-sandbox:1 -f docker/sandbox/Dockerfile .",
+    "sandbox:cleanup": "node scripts/cleanup-sandboxes.js",
+    "eval:p0:dry": "node scripts/evals/run-p0.js --dry",
+    "eval:p0:fake": "node scripts/evals/run-p0.js --suite=fake",
+    "eval:p0:real": "node scripts/evals/run-p0.js --suite=real --tasks=all"
   },
   "license": "MIT",
   "dependencies": {

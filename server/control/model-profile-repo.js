@@ -1,6 +1,9 @@
 // 模型 profile 仓储：凭证只保存 credential_ref，API 只返回 credential_configured。
 import { getPool } from './pg.js';
 import { credentialConfigured } from './credentials.js';
+import { isPrivateHost } from '../net/ssrf.js';
+
+export { isPrivateHost };
 
 function safe(row){
   if (!row) return null;
@@ -12,17 +15,6 @@ function safe(row){
     capabilities: row.capabilities || {}, context_window: row.context_window,
     enabled: !!row.enabled, created_at: row.created_at, updated_at: row.updated_at,
   };
-}
-
-export function isPrivateHost(hostname){
-  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (['localhost', '0.0.0.0', '::1', 'metadata.google.internal'].includes(h)) return true;
-  if (h.endsWith('.localhost') || h.endsWith('.internal')) return true;
-  if (/^127\./.test(h) || /^10\./.test(h) || /^169\.254\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true;
-  return false;
 }
 
 export function assertModelBaseUrl(value){

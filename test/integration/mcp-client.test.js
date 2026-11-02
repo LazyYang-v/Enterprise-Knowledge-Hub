@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { listMcpTools, withMcpSession } from '../../server/tools/mcp-client.js';
-import { ToolRunError } from '../../server/tools/result.js';
 
+// 测试服务在 127.0.0.1；必须在 config 求值前显式放开私网，验证默认拒绝的用例单独覆盖。
+process.env.EKH_MCP_ALLOW_PRIVATE_HOSTS = '1';
 process.env.EKH_MCP_TEST_TOKEN = 'mcp-bearer-secret';
+
+const { listMcpTools, withMcpSession } = await import('../../server/tools/mcp-client.js');
+const { ToolRunError } = await import('../../server/tools/result.js');
 
 function startMcpServer(){
   const seen = { auth: [], sessions: [], methods: [] };

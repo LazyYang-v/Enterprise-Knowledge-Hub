@@ -6,3 +6,4 @@ data/
 coverage/
 test-results/
 .ekh-test-*
+evals/p0/results/

@@ -9,7 +9,7 @@ import {
   artifactMeta, withArtifactNameLock, upsertBlobRef, nextArtifactVersion,
   findActiveArtifactBySha, insertArtifact, incrementBlobRef, softDeleteArtifact,
   addAttachment, assertTaskArtifacts, countTaskArtifacts, countTaskBytes,
-  listArtifacts, getArtifact, getArtifactWithBlob, getArtifactWithBlobByName,
+  listArtifacts, listArtifactsForUser, getArtifact, getArtifactWithBlob, getArtifactWithBlobByName,
   listGcCandidateBlobs, deleteBlobRow, recountBlobRefs, existingStorageKeys,
   lockBlobForGc, purgeDeletedArtifactsForBlob, countArtifactRowsForBlob,
 } from '../control/artifact-repo.js';
@@ -157,6 +157,10 @@ export function createArtifactService({
 
   function list({ tenantId, taskId, includeDeleted = false, kind = null, limit = 200 }){
     return listArtifacts({ tenantId, taskId, includeDeleted, kind, limit });
+  }
+
+  function listForUser(options){
+    return listArtifactsForUser(options);
   }
 
   async function listForPrompt({ tenantId, taskId, limit = 50 }){
@@ -310,7 +314,7 @@ export function createArtifactService({
   }
 
   return {
-    ingest, getForRead, list, listForPrompt, download, attachUpload, softDelete,
+    ingest, getForRead, list, listForUser, listForPrompt, download, attachUpload, softDelete,
     assertFinishRefs, gc, recountRefs,
     limits: lim, fileLimits: { ...config.files, ...(fileLimits || {}) },
   };

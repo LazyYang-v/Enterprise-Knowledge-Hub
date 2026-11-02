@@ -14,6 +14,9 @@ import {
 } from './task-repo.js';
 import { TaskService, RETRYABLE_ERRORS } from './task-service.js';
 import { executeTask, TaskExecutionError } from './task-executor.js';
+import { resolveSandboxRuntime } from '../tools/sandbox-runtime.js';
+import { stopAllSandboxes } from '../tools/sandbox.js';
+import { injectFault } from '../testing/fault-injection.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -55,6 +58,8 @@ export class TaskWorker {
 
   async start(){
     if (this.running) return;
+    // container 模式必须在领取任务前确认运行时/镜像，缺一即启动失败（失败关闭）。
+    resolveSandboxRuntime();
     this.running = true;
     await registerWorker({
       workerId: this.workerId, hostname: os.hostname(),
@@ -67,7 +72,10 @@ export class TaskWorker {
   async _loop(){
     while (this.running){
       try {
-        const task = await claimNextTask({ workerId: this.workerId, leaseTtlMs: this.options.leaseTtlMs });
+        const task = await claimNextTask({
+          workerId: this.workerId, leaseTtlMs: this.options.leaseTtlMs,
+          tenantId: this.options.tenantId || null,
+        });
         if (task){
           await this.runTask(task);
           continue;
@@ -95,7 +103,10 @@ export class TaskWorker {
   }
 
   async runOnce(){
-    const task = await claimNextTask({ workerId: this.workerId, leaseTtlMs: this.options.leaseTtlMs });
+    const task = await claimNextTask({
+      workerId: this.workerId, leaseTtlMs: this.options.leaseTtlMs,
+      tenantId: this.options.tenantId || null,
+    });
     if (!task) return null;
     return this.runTask(task);
   }
@@ -130,6 +141,9 @@ export class TaskWorker {
           throw new TaskExecutionError('model_unavailable', `模型配置解析失败：${e.message}`, { retryable: false });
         }
       }
+      await injectFault('worker.before_task', {
+        task, signal: abort.signal, worker_id: this.workerId,
+      });
       const result = await executeTask(task, {
         workerId: this.workerId, model, signal: abort.signal,
         log: msg => this.log(msg),
@@ -219,7 +233,11 @@ export class TaskWorker {
           last_error_code: code, last_error_detail: err.message,
           lease_owner: null, lease_expires_at: null,
         },
-        eventType: 'task.failed', eventPayload: { error_code: code, message: err.message },
+        eventType: 'task.failed',
+        eventPayload: {
+          error_code: code, message: err.message,
+          ...(err.meta && typeof err.meta === 'object' ? err.meta : {}),
+        },
         actorType: 'worker', actorId: this.workerId,
       });
       this.log(`task ${fresh.id} failed: ${code}`);
@@ -247,6 +265,7 @@ export class TaskWorker {
       // 给 finally 释放租约的时间
       await sleep(200);
     }
+    await stopAllSandboxes('worker_shutdown');
     await Promise.race([
       this._loopPromise || Promise.resolve(),
       sleep(Math.max(this.options.shutdownGraceMs, 2000)),

@@ -67,7 +67,7 @@ export async function* streamChat(model, messages, { temperature = 0.7, signal, 
   }
 }
 
-export async function chatOnce(model, messages, { temperature = 0.3, signal } = {}){
+export async function chatOnce(model, messages, { temperature = 0.3, signal, onUsage = null } = {}){
   const base = normalizeBaseUrl(model.base_url);
   const res = await fetch(base + '/chat/completions', {
     method: 'POST',
@@ -77,6 +77,9 @@ export async function chatOnce(model, messages, { temperature = 0.3, signal } = 
   });
   if (!res.ok) throw new Error(`模型请求失败 (${res.status})`);
   const json = await res.json();
+  if (onUsage && json?.usage && typeof json.usage === 'object'){
+    try { onUsage(json.usage); } catch {}
+  }
   return json.choices?.[0]?.message?.content || '';
 }
 

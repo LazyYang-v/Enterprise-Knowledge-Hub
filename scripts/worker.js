@@ -9,6 +9,7 @@ import { closePool } from '../server/control/pg.js';
 import { TaskWorker } from '../server/control/worker.js';
 import { TaskService } from '../server/control/task-service.js';
 import { modelFromEnv, resolveTaskModel } from '../server/control/model-resolver.js';
+import { configureFaults, faultInjectionEnabled } from '../server/testing/fault-injection.js';
 
 export { modelFromEnv };
 
@@ -25,6 +26,7 @@ export function optionsFromEnv(env = process.env){
     retryBaseMs: num('EKH_TASK_RETRY_BASE_MS', 5000),
     maxRetryDelayMs: num('EKH_TASK_RETRY_MAX_MS', 45000),
     shutdownGraceMs: num('EKH_WORKER_SHUTDOWN_GRACE_MS', 10000),
+    tenantId: env.EKH_WORKER_TENANT_ID || null,
   };
 }
 
@@ -36,6 +38,10 @@ async function main(){
   const args = new Set(process.argv.slice(2));
   const workerId = process.env.EKH_WORKER_ID || `worker-${os.hostname()}-${process.pid}`;
   const log = msg => console.log(`[worker ${workerId}] ${msg}`);
+
+  // 生产环境显式开启会直接抛错；非法配置同样启动失败。
+  configureFaults();
+  if (faultInjectionEnabled()) log('故障注入已启用（仅限测试/演练）');
 
   if (args.has('--reap-only')){
     const service = new TaskService();

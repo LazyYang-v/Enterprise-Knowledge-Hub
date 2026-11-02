@@ -158,5 +158,11 @@ export function descriptorHash(descriptor){
     schema_hash: descriptor.schema_hash,
     code_hash: descriptor.code_hash || '',
     source: descriptor.source,
+    side_effect: descriptor.side_effect,
+    approval_policy: descriptor.approval_policy,
+    timeout_ms: descriptor.timeout_ms,
+    idempotency: descriptor.idempotency,
+    resource_scope: descriptor.resource_scope,
+    sandbox_profile: descriptor.sandbox_profile,
   });
 }

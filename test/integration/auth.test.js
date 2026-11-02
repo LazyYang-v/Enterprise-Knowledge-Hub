@@ -33,6 +33,10 @@ test('注册、登录与 /me 的既有行为不回归', async () => {
   const me = await app.request('GET', '/api/auth/me', { token: login.data.token });
   assert.equal(me.status, 200);
   assert.equal(me.data.user.email, 'alice@example.com');
+  assert.equal(me.data.user.platform.agent_platform_enabled, false);
+  assert.equal(me.data.user.platform.sandbox_mode, 'process');
+  assert.ok(me.data.user.platform.artifact_limits.max_bytes > 0);
+  assert.ok(me.data.user.platform.artifact_limits.upload_max_bytes > 0);
 
   const bad = await app.request('GET', '/api/auth/me', { token: 'invalid-token' });
   assert.equal(bad.status, 401);
