@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { $uuid, $token, hashPassword, now } from './util.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DATA_DIR = path.join(ROOT, 'data');
+// 允许测试/多实例通过 EKH_DATA_DIR 指定独立数据目录；默认保持 <repo>/data。
+export const DATA_DIR = process.env.EKH_DATA_DIR
+  ? path.resolve(process.env.EKH_DATA_DIR)
+  : path.join(ROOT, 'data');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 

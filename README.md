@@ -28,14 +28,39 @@ npm install
 npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 ```
 
-启动后自动注入演示数据，使用演示账号登录：
+启动后自动注入演示数据（**仅开发环境**），使用演示账号登录：
 
 ```
 邮箱：lzy@example.com
 密码：password
 ```
 
-数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件），删除该目录即完全重置。
+> 生产环境（`NODE_ENV=production`）不会创建演示账号，也不会在启动日志打印凭据。参考 `docs/threat-model.md` G7。
+
+数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
+
+## P0-0：测试、控制面与护栏
+
+本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成 **P0-0 基线与护栏**：
+
+- Node 内置 `node:test` 单元/集成测试与 GitHub Actions CI
+- PostgreSQL 16 控制面 + 可重复 SQL 迁移（任务/事件/审批/检查点等核心表）
+- `AGENT_PLATFORM_ENABLED` 特性开关（默认关闭，P0-0 不接线）
+- 生产环境禁用演示数据
+- C1–C8 基线复现脚本与安全/数据/保留文档
+- 30 条评测任务 + 3 个端到端场景
+
+```bash
+npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
+npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
+export DATABASE_URL='postgres://ekh:ekh_dev_password@127.0.0.1:55432/ekh'
+npm run db:migrate       # 再执行一次应为幂等
+npm run test:pg          # 需 DATABASE_URL 指向 *_test 数据库
+npm run repro:baseline   # 生成 docs/baseline/c1-c8.{json,md}
+```
+
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`。
+
 
 ## 配置模型
 
@@ -55,7 +80,10 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 ```
 ├── server/                后端（Node.js + Express + node:sqlite）
-│   ├── index.js           入口：路由挂载 + 静态资源
+│   ├── index.js           进程入口：seed + 监听端口
+│   ├── app.js             Express 应用工厂（测试可导入，不 listen）
+│   ├── config.js          环境变量与特性开关
+│   ├── bootstrap.js       演示数据门禁（生产禁用）
 │   ├── db.js              SQLite 初始化、建表、种子
 │   ├── auth.js            注册 / 登录 / 令牌认证中间件
 │   ├── parse.js           多格式文本抽取 + 分块
@@ -63,13 +91,20 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 │   ├── search.js          混合检索（FTS5 trigram + 向量余弦）
 │   ├── llm.js             OpenAI 兼容客户端（流式对话 / Embeddings）
 │   ├── custom-tools.js    自定义工具：上传 JS 的沙箱解析与执行
+│   ├── control/           控制面 PostgreSQL 连接与迁移执行器
 │   ├── seed-demo.js       演示数据
 │   └── routes/            kbs（知识库+文档）、chat（会话+SSE）、agents、orgs、misc（产物/工具/模型/记忆/搜索）
+├── migrations/            控制面 SQL 迁移（P0-0 起）
+├── test/                  node:test 单元、集成、PostgreSQL 测试
+├── scripts/               迁移 CLI、C1–C8 基线复现
+├── docs/                  威胁模型、数据分类、保留策略、ADR、Runbook、基线报告
+├── evals/                 30 条评测任务与 3 个 E2E 场景（P0-0 定义）
 ├── public/                前端（原生 HTML/CSS/JS，无构建步骤）
 │   ├── index.html         应用骨架
 │   ├── styles.css         主题变量 + 全部样式（源自 WeKnora 主题）
 │   └── app.js             视图渲染、SSE 客户端、极简 Markdown 渲染
 ├── prototype.html         最初的 UI 设计原型（留档）
+├── docker-compose.yml     控制面 PostgreSQL（端口 55432）
 └── data/                  运行时数据（自动创建，勿提交）
 ```
 
@@ -102,4 +137,5 @@ GET|POST /api/memories                    GET /api/search?q=（⌘K）
 ## 参考与致谢
 
 - UI 设计与主题变量参考 [WeKnora](https://github.com/Tencent/WeKnora)（腾讯开源知识库框架），产品概念（知识库 / 会话 / 混合检索 / 引用溯源）亦受其启发；本项目为独立实现。
-- 依赖：express、multer、pdfjs-dist、mammoth、xlsx、adm-zip。
+- 依赖：express、multer、pdfjs-dist、mammoth、xlsx、adm-zip、pg（控制面）。
+- 设计文档：`Enterprise-Knowledge-Hub-Agent-P0-Design.md`（P0-0…P0-6 分阶段规划）。

@@ -1,0 +1,30 @@
+{
+  "id": "E2E-3",
+  "name": "中断恢复",
+  "task_id": "T29",
+  "goal": "创建一条 CRM 记录并生成确认报告；在工具调用发出后、响应返回前 kill Worker，验证恢复后不重复写入。",
+  "inputs": [
+    { "name": "模拟 CRM 写工具（支持幂等键）", "kind": "tool", "classification": "internal" }
+  ],
+  "steps": [
+    "Agent 调用 mcp.crm.create_record，携带 idempotency_key",
+    "在外部响应返回前 kill Worker",
+    "租约过期后 Reaper 恢复任务，读取检查点与在途 attempt",
+    "使用同一幂等键重试，记录 provider 响应",
+    "生成确认报告与对账记录"
+  ],
+  "expected_artifacts": ["confirmation-report.md", "reconciliation.json"],
+  "expected_tools": ["mcp.crm.create_record", "document.write", "artifact.create"],
+  "acceptance_ids": ["R-02", "R-03", "S-08", "P-05"],
+  "security_checks": [
+    "不得生成新的逻辑工具调用，只能新增 attempt",
+    "不得在结果未知时自动重发不支持幂等的写操作",
+    "审批参数哈希在恢复后仍然匹配"
+  ],
+  "pass_criteria": [
+    "CRM 中只有一条记录",
+    "恢复后任务完成并记录对账",
+    "事件序号连续，审计完整",
+    "Worker 旧租约的写入被 fencing 拒绝"
+  ]
+}

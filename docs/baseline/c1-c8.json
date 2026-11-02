@@ -1,0 +1,79 @@
+{
+  "generatedAt": "2026-11-02T08:58:53.192Z",
+  "commit": "7dca290627aeac53e1f644a9e82824f7b8a2757e",
+  "node": "v24.21.0",
+  "platform": "darwin-arm64",
+  "note": "P0-0 基线报告，仅记录当前行为，不作为 CI 门禁；不要在生产数据上运行。",
+  "summary": {
+    "reproduced": 5,
+    "safe": 1,
+    "static_evidence": 2,
+    "not_reproduced": 0
+  },
+  "checks": [
+    {
+      "id": "C1",
+      "title": "Agent 预设的 kb_ids 未与用户可见知识库求交集",
+      "setup": "Alice 创建 Agent，kb_ids 指向 Bob 的私有知识库；Alice 发起聊天",
+      "observed": "Alice 的聊天响应包含 Bob 知识库内容",
+      "status": "reproduced",
+      "evidence": "SSE meta/delta 中出现“888 万元”"
+    },
+    {
+      "id": "C2",
+      "title": "会话创建接受任意 agent_id，未校验 owner",
+      "setup": "Alice 创建会话时把 agent_id 填成 Bob 的 Agent",
+      "observed": "HTTP 200，会话 agent=Bob 的智能体",
+      "status": "reproduced",
+      "evidence": "会话成功加载了 Bob 的 Agent 配置"
+    },
+    {
+      "id": "C3",
+      "title": "自定义工具的删除/启停缺少 owner 校验",
+      "setup": "Bob 上传自定义工具；Alice 调用 DELETE /api/tools/custom/:id",
+      "observed": "Alice 删除返回 HTTP 200；工具仍存在=false",
+      "status": "reproduced",
+      "evidence": "非所有者成功删除他人工具"
+    },
+    {
+      "id": "C4",
+      "title": "模型管理接口无管理员校验",
+      "setup": "普通用户 Alice 调用 POST /api/models",
+      "observed": "HTTP 200",
+      "status": "reproduced",
+      "evidence": "普通用户成功新增模型配置"
+    },
+    {
+      "id": "C5",
+      "title": "MCP 入站 Server 使用单一全局服务令牌",
+      "setup": "使用服务令牌调用 MCP get_document 读取 Bob 的文档",
+      "observed": "服务令牌成功读取 Bob 私有文档内容",
+      "status": "reproduced",
+      "evidence": "MCP tools/call get_document 返回文档文本"
+    },
+    {
+      "id": "C6",
+      "title": "浏览器关闭会 abort 上游模型流",
+      "setup": "关闭聊天页面，观察上游模型请求",
+      "observed": "静态证据：res.on(\"close\") 调用 abortStream.abort()",
+      "status": "static_evidence",
+      "evidence": "server/routes/chat.js:173-175"
+    },
+    {
+      "id": "C7",
+      "title": "检索候选集全量读出后在 JS 中算余弦",
+      "setup": "统计一次检索读取的候选行数",
+      "observed": "当前知识库候选 chunk 数=1；检索实现无候选上限",
+      "status": "static_evidence",
+      "evidence": "server/search.js:23-29（SELECT 无 LIMIT）、62-93"
+    },
+    {
+      "id": "C8",
+      "title": "用户令牌 /api/retrieve 的 ACL 基线",
+      "setup": "Alice 使用用户令牌检索 Bob 的知识库",
+      "observed": "HTTP 403",
+      "status": "safe",
+      "evidence": "越权检索被拒绝，可作为 KnowledgeService 基线"
+    }
+  ]
+}

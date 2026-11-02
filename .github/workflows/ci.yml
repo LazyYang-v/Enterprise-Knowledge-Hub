@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  sqlite-tests:
+    name: Unit & integration (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  postgres-tests:
+    name: PostgreSQL migrations & control-plane schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ekh
+          POSTGRES_PASSWORD: ekh_dev_password
+          POSTGRES_DB: ekh_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ekh -d ekh_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://ekh:ekh_dev_password@127.0.0.1:5432/ekh_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Migrate (first run)
+        run: npm run db:migrate
+      - name: Migrate (idempotent rerun)
+        run: npm run db:migrate
+      - name: Migration tests
+        run: npm run test:pg
+
+  baseline:
+    name: C1-C8 baseline (non-gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run repro:baseline
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c1-c8-baseline
+          path: docs/baseline/
