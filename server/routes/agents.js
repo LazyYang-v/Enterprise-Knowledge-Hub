@@ -2,9 +2,19 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { $uuid, now, err } from '../util.js';
 import { authRequired } from '../auth.js';
+import { intersectVisibleKbIds } from '../knowledge/acl.js';
 
 const router = Router();
 router.use(authRequired);
+
+function bindableKbIds(res, userId, value){
+  if (value == null) return [];
+  if (!Array.isArray(value)){ err(res, 400, 'kb_ids 必须是数组'); return null; }
+  const ids = [...new Set(value.map(String).filter(Boolean))];
+  const { denied } = intersectVisibleKbIds(userId, ids);
+  if (denied.length){ err(res, 403, `无权访问知识库: ${denied.join(', ')}`); return null; }
+  return ids;
+}
 
 function agentRow(a){
   const kbs = JSON.parse(a.kb_ids || '[]');
@@ -25,12 +35,14 @@ router.get('/agents', (req, res) => {
 });
 
 router.post('/agents', (req, res) => {
-  const { name, description = '', color = '', system_prompt = '', model = '', kb_ids = [], tools = [] } = req.body || {};
+  const { name, description = '', color = '', system_prompt = '', model = '', tools = [] } = req.body || {};
   if (!name || !String(name).trim()) return err(res, 400, '请填写智能体名称');
+  const kbIds = bindableKbIds(res, req.user.id, req.body?.kb_ids ?? []);
+  if (!kbIds) return;
   const id = $uuid();
   db.prepare('INSERT INTO agents(id, owner_id, name, description, color, system_prompt, model, kb_ids, tools, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, req.user.id, String(name).trim().slice(0, 60), String(description).slice(0, 300), color,
-      String(system_prompt).slice(0, 4000), String(model), JSON.stringify(kb_ids || []), JSON.stringify(tools || []), now(), now());
+      String(system_prompt).slice(0, 4000), String(model), JSON.stringify(kbIds), JSON.stringify(tools || []), now(), now());
   const a = db.prepare('SELECT * FROM agents WHERE id = ?').get(id);
   res.json({ agent: agentRow(a) });
 });
@@ -44,7 +56,11 @@ router.put('/agents/:id', (req, res) => {
   if (color != null) db.prepare('UPDATE agents SET color = ? WHERE id = ?').run(String(color), a.id);
   if (system_prompt != null) db.prepare('UPDATE agents SET system_prompt = ? WHERE id = ?').run(String(system_prompt).slice(0, 4000), a.id);
   if (model !== undefined) db.prepare('UPDATE agents SET model = ? WHERE id = ?').run(String(model || ''), a.id);
-  if (kb_ids != null) db.prepare('UPDATE agents SET kb_ids = ? WHERE id = ?').run(JSON.stringify(kb_ids || []), a.id);
+  if (kb_ids != null){
+    const kbIds = bindableKbIds(res, req.user.id, kb_ids);
+    if (!kbIds) return;
+    db.prepare('UPDATE agents SET kb_ids = ? WHERE id = ?').run(JSON.stringify(kbIds), a.id);
+  }
   if (tools != null) db.prepare('UPDATE agents SET tools = ? WHERE id = ?').run(JSON.stringify(tools || []), a.id);
   db.prepare('UPDATE agents SET updated_at = ? WHERE id = ?').run(now(), a.id);
   res.json({ agent: agentRow(db.prepare('SELECT * FROM agents WHERE id = ?').get(a.id)) });

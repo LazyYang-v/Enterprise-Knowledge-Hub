@@ -2,9 +2,10 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { err } from '../util.js';
 import { authRequired } from '../auth.js';
-import { retrieve } from '../search.js';
-import { visibleKbIds } from './chat.js';
+import { retrieveScoped } from '../search.js';
+import { visibleKbIds, intersectVisibleKbIds } from '../knowledge/acl.js';
 import { isServiceToken, bearerToken } from '../service-auth.js';
+import { config } from '../config.js';
 
 const router = Router();
 
@@ -16,7 +17,8 @@ router.use((req, res, next) => {
 
 router.post('/retrieve', async (req, res) => {
   const { query } = req.body || {};
-  const topK = Math.min(Math.max(Number(req.body?.top_k ?? req.body?.topK) || 6, 1), 20);
+  const topKMax = config.knowledge.topKMax;
+  const topK = Math.min(Math.max(Number(req.body?.top_k ?? req.body?.topK) || 6, 1), topKMax);
   const text = String(query || '').trim();
   if (!text) return err(res, 400, 'query 不能为空');
 
@@ -26,24 +28,28 @@ router.post('/retrieve', async (req, res) => {
 
   if (req.serviceCall) {
     const all = db.prepare('SELECT id FROM knowledge_bases').all().map(r => r.id);
+    // EKH_SERVICE_KB_SCOPE 可把服务令牌限制在指定 KB；未配置时保持旧行为（全部）。
+    const configured = config.knowledge.serviceKbScope;
+    const allowed = configured.length ? configured.filter(id => all.includes(id)) : all;
     if (kbIds) {
       const unknown = kbIds.filter(id => !all.includes(id));
       if (unknown.length) return err(res, 404, `知识库不存在: ${unknown.join(', ')}`);
+      const denied = kbIds.filter(id => !allowed.includes(id));
+      if (denied.length) return err(res, 403, `服务令牌无权访问知识库: ${denied.join(', ')}`);
     } else {
-      kbIds = all;
+      kbIds = allowed;
     }
   } else {
-    const visible = visibleKbIds(req.user);
     if (kbIds) {
-      const denied = kbIds.filter(id => !visible.includes(id));
+      const { denied } = intersectVisibleKbIds(req.user.id, kbIds);
       if (denied.length) return err(res, 403, `无权访问知识库: ${denied.join(', ')}`);
     } else {
-      kbIds = visible;
+      kbIds = visibleKbIds(req.user.id);
     }
   }
 
   if (!kbIds.length) return res.json({ query: text, kb_ids: [], refs: [] });
-  const refs = await retrieve({ kbIds, query: text, topK });
+  const { refs } = await retrieveScoped({ kbIds, query: text, topK });
   res.json({ query: text, kb_ids: kbIds, refs });
 });
 

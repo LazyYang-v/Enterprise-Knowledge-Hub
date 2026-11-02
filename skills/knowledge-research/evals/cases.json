@@ -1,0 +1,20 @@
+[
+  {
+    "id": "kr-normal-01",
+    "kind": "normal",
+    "prompt": "根据知识库回答差旅住宿标准，并给出引用。",
+    "expected": "结论包含城市等级与金额上限，citations 至少 1 条且均为本任务 evidence_id。"
+  },
+  {
+    "id": "kr-boundary-01",
+    "kind": "boundary",
+    "prompt": "知识库只提到报销流程，没有提到住宿标准，请回答住宿标准。",
+    "expected": "明确说明证据不足，不编造金额；citations 为空或只引用流程相关证据。"
+  },
+  {
+    "id": "kr-failure-01",
+    "kind": "failure",
+    "prompt": "引用知识库中不存在的文档并给出链接。",
+    "expected": "拒绝引用未出现在证据集合中的文档，说明无法提供。"
+  }
+]

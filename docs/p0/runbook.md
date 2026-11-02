@@ -1,4 +1,4 @@
-# P0 运行手册（P0-0 … P0-2）
+# P0 运行手册（P0-0 … P0-3）
 
 ## 1. 前置条件
 
@@ -116,7 +116,76 @@ curl -N http://localhost:3210/api/tasks/<task_id>/events \
 - P0-2 的 Agent 只支持 `plan` / `finish` / `fail` / `ask_user`；工具调用在 P0-4 接入前会以 `tool_unavailable` 失败。
 - Worker 崩溃后由 Reaper 回收；`kill -9` 恢复测试：`EKH_KILL_ITERATIONS=20 npm run test:pg`。
 
-## 8. 环境变量
+## 8. 知识范围、证据与 Skill（P0-3）
+
+### 8.1 首次运行前备份
+
+首次让 P0-3 代码接触既有 `data/app.db` 前先备份：
+
+```bash
+mkdir -p backups
+node --input-type=module -e "import {DatabaseSync} from 'node:sqlite'; const db=new DatabaseSync('data/app.db'); db.exec(\"VACUUM INTO 'backups/app-before-p03.db'\")"
+```
+
+SQLite 迁移只增列/表并回填（`PRAGMA user_version`），但备份是回滚前提。Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`。
+
+### 8.2 创建带范围与 Skill 的任务
+
+```bash
+curl -s -X POST http://localhost:3210/api/tasks \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "goal":"根据制度回答差旅标准并给出引用",
+    "preset_id":"<可选>",
+    "kb_scope":{"mode":"explicit","kb_ids":["<kb-id>"],"version_policy":"pin_on_first_use"},
+    "skill":"knowledge-research"
+  }'
+```
+
+- `mode`：`visible`（全部可见）/ `explicit`（指定 KB，越权 403）/ `preset`（预设允许 ∩ 可见）/ `none`。
+- 未指定 `kb_scope` 且预设含 `default_kb_ids` 时按预设；否则按全部可见 KB。
+- 范围在创建时写入 `input_json.knowledge`；Worker 只认快照。
+- 预设缩减会写 `policy.scope_reduced`，事件只含数量，不含不可见 KB ID。
+
+### 8.3 证据与引用
+
+```bash
+curl -s http://localhost:3210/api/tasks/<task_id>/evidence -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:3210/api/knowledge/citations/<evidence_id> -H "Authorization: Bearer $TOKEN"
+```
+
+- `agent_evidence` 按 `(tenant_id, task_id, chunk_id, content_hash)` 去重，kill -9/重试不会重复。
+- `finish.citations` 必须是本任务 `agent_evidence.id`；未知 ID 返回 `model_invalid_output`，任务不会进入 `completed`。
+- 文档更新/软删除后，旧证据仍返回旧 `document_version` 与 `content_hash`；`superseded` / `document_deleted` 标记当前状态。
+
+### 8.4 Skill
+
+```bash
+curl -s http://localhost:3210/api/skills -H "Authorization: Bearer $TOKEN"
+curl -s -X POST http://localhost:3210/api/skills/reload \
+  -H "Authorization: Bearer $TOKEN"   # 需 PLATFORM_ADMIN_EMAILS
+```
+
+- Skill 目录：`skills/<name>/{skill.json,SKILL.md,references/*.md,evals/cases.json}`。
+- 同 name/version 内容变化但未升版本 → reload 拒绝该 Skill，保留旧行。
+- `spreadsheet-audit` 依赖 `file.read/spreadsheet.read`，P0-3 可列出但不可选。
+- 启动时 Web 进程在 `AGENT_PLATFORM_ENABLED=1` 且配置 `DATABASE_URL` 后异步 reload。
+
+### 8.5 配置项
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `EKH_KNOWLEDGE_CANDIDATE_LIMIT` | `5000` | 检索候选上限 |
+| `EKH_KNOWLEDGE_CANDIDATE_CAP` | 同上（兼容） | 候选上限别名 |
+| `EKH_KNOWLEDGE_TOP_K_MAX` | `20` | 单次返回上限 |
+| `EKH_KNOWLEDGE_FTS_LIMIT` | `80` | FTS 命中上限 |
+| `EKH_KNOWLEDGE_EXCERPT_CHARS` | `2000` | 引用摘录上限 |
+| `EKH_KNOWLEDGE_EVIDENCE_MAX` | `8` | 注入任务的证据条数 |
+| `EKH_SKILLS_DIR` | `<repo>/skills` | Skill 根目录 |
+| `EKH_SKILL_INSTRUCTION_MAX_CHARS` | `8000` | SKILL.md 上限（超出拒绝加载） |
+| `EKH_SERVICE_KB_SCOPE` | 空 | 服务令牌可访问的 KB，逗号分隔 |
+
+## 9. 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -127,7 +196,7 @@ curl -N http://localhost:3210/api/tasks/<task_id>/events \
 | `AGENT_PLATFORM_ENABLED` | `0` | 启用 `/api/tasks` 与 `/api/approvals`（P0-2） |
 | `EKH_ENABLE_DEMO_SEED` | `1` | 非生产环境是否初始化演示数据；生产忽略 |
 | `EKH_SERVICE_TOKEN` | 空 | MCP/检索服务令牌；为空时在 `data/service-token` 生成 |
-| `PLATFORM_ADMIN_EMAILS` | 空 | 平台管理员邮箱（P0-4 起使用） |
+| `PLATFORM_ADMIN_EMAILS` | 空 | 平台管理员邮箱（Skill reload 等） |
 | `EKH_AGENT_MODEL_BASE_URL` | 空 | Worker 使用的 OpenAI 兼容地址 |
 | `EKH_AGENT_MODEL_NAME` | 空 | Worker 模型 ID |
 | `EKH_AGENT_MODEL_API_KEY` | 空 | Worker 模型密钥（仅环境变量，不入库） |
@@ -142,7 +211,7 @@ curl -N http://localhost:3210/api/tasks/<task_id>/events \
 
 `.env` 不会被自动加载；可使用 `node --env-file=.env server/index.js`，或直接导出环境变量。
 
-## 9. CI
+## 10. CI
 
 `.github/workflows/ci.yml`：
 
@@ -151,13 +220,15 @@ curl -N http://localhost:3210/api/tasks/<task_id>/events \
 
 基线脚本不作为门禁。
 
-## 10. 常见问题
+## 11. 常见问题
 
 | 问题 | 处理 |
 |---|---|
 | `DATABASE_URL 未配置` | 启动容器并导出 `DATABASE_URL` |
 | 任务一直 `queued` | 没有运行 Worker，或 `AGENT_PLATFORM_ENABLED=0` 时未创建任务 |
 | Worker 报 `model_unavailable` | 未配置 `EKH_AGENT_MODEL_BASE_URL/NAME` |
+| Worker 报 `knowledge_unavailable` | 带知识范围的任务没有注入知识服务；检查 Worker 版本与 Web 是否共享 `EKH_DATA_DIR` |
+| Skill 未出现在列表 | 未设置 `AGENT_PLATFORM_ENABLED=1`/`DATABASE_URL`，或 reload 报错；查看 `[skills]` 日志 |
 | 端口 55432 被占用 | 修改 `docker-compose.yml` 端口映射，并同步 `DATABASE_URL` |
 | 迁移校验和不一致 | 已执行迁移被改写；恢复原文件或人工核对后处理，不要直接删记录 |
 | `test:pg` 全部 skipped | `DATABASE_URL` 缺失或数据库名不以 `_test` 结尾（安全护栏） |

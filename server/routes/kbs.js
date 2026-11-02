@@ -7,22 +7,15 @@ import { $uuid, now, err, fmtSize, fixFileName } from '../util.js';
 import { authRequired } from '../auth.js';
 import { enqueue } from '../ingest.js';
 import { iconFor } from '../parse.js';
+import { kbAccess, canWrite, visibleKbs } from '../knowledge/acl.js';
 
-export function kbAccess(user, kb){
-  // 返回 { visible, role }，role: owner | admin | contributor | viewer
-  if (kb.owner_id === user.id) return { visible: true, role: 'owner' };
-  if (kb.org_id){
-    const m = db.prepare('SELECT role FROM org_members WHERE org_id = ? AND user_id = ?').get(kb.org_id, user.id);
-    if (m) return { visible: true, role: m.role };
-  }
-  return { visible: false, role: null };
-}
-export const canWrite = role => ['owner', 'admin', 'contributor'].includes(role);
+// 兼容旧 import：ACL 实现已迁到 knowledge/acl.js。
+export { kbAccess, canWrite };
 
 function kbRow(user, kb){
   const owner = db.prepare('SELECT name FROM users WHERE id = ?').get(kb.owner_id);
   const org = kb.org_id ? db.prepare('SELECT name FROM orgs WHERE id = ?').get(kb.org_id) : null;
-  const docs = db.prepare("SELECT COUNT(*) c, SUM(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready FROM documents WHERE kb_id = ?").get(kb.id);
+  const docs = db.prepare("SELECT COUNT(*) c, SUM(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready FROM documents WHERE kb_id = ? AND deleted_at IS NULL").get(kb.id);
   const fav = !!db.prepare('SELECT 1 FROM kb_favorites WHERE user_id = ? AND kb_id = ?').get(user.id, kb.id);
   return {
     id: kb.id, name: kb.name, description: kb.description,
@@ -54,9 +47,7 @@ router.use(authRequired);
 // —— 知识库列表 ——
 router.get('/kbs', (req, res) => {
   const { scope = 'all', q = '' } = req.query;
-  const myOrgs = db.prepare('SELECT org_id FROM org_members WHERE user_id = ?').all(req.user.id).map(r => r.org_id);
-  const all = db.prepare('SELECT * FROM knowledge_bases ORDER BY updated_at DESC').all();
-  let visible = all.filter(kb => kbAccess(req.user, kb).visible);
+  let visible = visibleKbs(req.user.id);
   if (q) visible = visible.filter(kb => (kb.name + kb.description).toLowerCase().includes(String(q).toLowerCase()));
   const favSet = new Set(db.prepare('SELECT kb_id FROM kb_favorites WHERE user_id = ?').all(req.user.id).map(r => r.kb_id));
   let list = visible;
@@ -115,13 +106,11 @@ router.delete('/kbs/:id', (req, res) => {
   if (!kb) return err(res, 404, '知识库不存在');
   const access = kbAccess(req.user, kb);
   if (access.role !== 'owner') return err(res, 403, '只有创建者可以删除知识库');
-  const docs = db.prepare('SELECT id, path FROM documents WHERE kb_id = ?').all(kb.id);
+  const docs = db.prepare('SELECT id, path FROM documents WHERE kb_id = ? AND deleted_at IS NULL').all(kb.id);
   for (const d of docs){
-    db.prepare('DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(d.id);
+    db.prepare("UPDATE documents SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?").run(now(), now(), d.id);
     if (d.path){ try { fs.rmSync(path.dirname(d.path), { recursive: true, force: true }); } catch {} }
   }
-  db.prepare('DELETE FROM chunks WHERE kb_id = ?').run(kb.id);
-  db.prepare('DELETE FROM documents WHERE kb_id = ?').run(kb.id);
   db.prepare('DELETE FROM kb_favorites WHERE kb_id = ?').run(kb.id);
   db.prepare('DELETE FROM knowledge_bases WHERE id = ?').run(kb.id);
   res.json({ ok: true });
@@ -145,7 +134,7 @@ router.get('/kbs/:id/documents', (req, res) => {
   if (!kb) return err(res, 404, '知识库不存在');
   if (!kbAccess(req.user, kb).visible) return err(res, 403, '无权访问该知识库');
   const q = String(req.query.q || '').toLowerCase();
-  let docs = db.prepare('SELECT * FROM documents WHERE kb_id = ? ORDER BY created_at DESC').all(kb.id);
+  let docs = db.prepare('SELECT * FROM documents WHERE kb_id = ? AND deleted_at IS NULL ORDER BY created_at DESC').all(kb.id);
   if (q) docs = docs.filter(d => d.name.toLowerCase().includes(q));
   res.json({ docs: docs.map(d => docRow(d)) });
 });
@@ -155,7 +144,9 @@ export function docRow(d){
     id: d.id, kb_id: d.kb_id, session_id: d.session_id, kind: d.kind,
     name: d.name, ext: d.ext, mime: d.mime, size: d.size,
     status: d.status, progress: d.progress, error: d.error || '',
-    chunk_count: d.chunk_count, created_at: d.created_at, updated_at: d.updated_at,
+    chunk_count: d.chunk_count, current_version: d.current_version ?? 1,
+    content_hash: d.content_hash || '', deleted_at: d.deleted_at || null,
+    created_at: d.created_at, updated_at: d.updated_at,
   };
 }
 
@@ -203,7 +194,7 @@ router.post('/kbs/:id/qa', (req, res) => {
 // —— 文档操作 ——
 function getDocForRead(req, res){
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
-  if (!doc){ err(res, 404, '文档不存在'); return null; }
+  if (!doc || doc.deleted_at){ err(res, 404, '文档不存在'); return null; }
   let ok = doc.owner_id === req.user.id;
   if (!ok && doc.kb_id){
     const kb = db.prepare('SELECT * FROM knowledge_bases WHERE id = ?').get(doc.kb_id);
@@ -220,8 +211,10 @@ function getDocForRead(req, res){
 router.get('/documents/:id', (req, res) => {
   const doc = getDocForRead(req, res);
   if (!doc) return;
-  const chunks = db.prepare('SELECT id, idx, content FROM chunks WHERE document_id = ? ORDER BY idx').all(doc.id);
-  res.json({ doc: docRow(doc), chunks });
+  const requested = Number(req.query.version);
+  const version = Number.isInteger(requested) && requested > 0 ? requested : (Number(doc.current_version) || 1);
+  const chunks = db.prepare('SELECT id, idx, content, content_hash, locator_json FROM chunks WHERE document_id = ? AND document_version = ? ORDER BY idx').all(doc.id, version);
+  res.json({ doc: docRow(doc), version, chunks });
 });
 
 router.get('/documents/:id/download', (req, res) => {
@@ -241,7 +234,7 @@ router.post('/documents/:id/reparse', (req, res) => {
   const doc = getDocForRead(req, res);
   if (!doc) return;
   db.prepare("UPDATE documents SET status = 'pending', progress = 0, error = '' WHERE id = ?").run(doc.id);
-  enqueue(doc.id);
+  enqueue(doc.id, { force: true });
   res.json({ ok: true });
 });
 
@@ -250,10 +243,9 @@ router.delete('/documents/:id', (req, res) => {
   if (!doc) return;
   const kb = doc.kb_id ? db.prepare('SELECT * FROM knowledge_bases WHERE id = ?').get(doc.kb_id) : null;
   if (kb && !canWrite(kbAccess(req.user, kb).role)) return err(res, 403, '没有删除权限');
-  db.prepare('DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(doc.id);
-  db.prepare('DELETE FROM chunks WHERE document_id = ?').run(doc.id);
+  // 软删除：保留版本/chunks 以支持历史引用与证据回读，仅从列表与检索中排除。
+  db.prepare("UPDATE documents SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?").run(now(), now(), doc.id);
   if (doc.path){ try { fs.rmSync(path.dirname(doc.path), { recursive: true, force: true }); } catch {} }
-  db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id);
   res.json({ ok: true });
 });
 
@@ -263,7 +255,7 @@ router.post('/kbs/:id/batch-download', (req, res) => {
   if (!kb) return err(res, 404, '知识库不存在');
   if (!kbAccess(req.user, kb).visible) return err(res, 403, '无权访问该知识库');
   const { ids = [] } = req.body || {};
-  let docs = db.prepare('SELECT * FROM documents WHERE kb_id = ?').all(kb.id);
+  let docs = db.prepare('SELECT * FROM documents WHERE kb_id = ? AND deleted_at IS NULL').all(kb.id);
   if (ids.length) docs = docs.filter(d => ids.includes(d.id));
   docs = docs.filter(d => d.path && fs.existsSync(d.path));
   if (!docs.length) return err(res, 400, '没有可下载的文件');

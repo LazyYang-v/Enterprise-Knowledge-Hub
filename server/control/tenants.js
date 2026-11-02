@@ -4,6 +4,26 @@ import { db } from '../db.js';
 import { getPool } from './pg.js';
 
 const cache = new Map();
+let platformTenantCache = null;
+
+export const PLATFORM_SOURCE_ORG_ID = 'platform';
+
+/** 平台租户：平台级 Skill 等全局配置的归属（source_org_id='platform'）。 */
+export async function ensurePlatformTenantId(){
+  if (platformTenantCache) return platformTenantCache;
+  const r = await getPool().query(
+    `INSERT INTO tenants (name, source_org_id) VALUES ('Platform', $1)
+     ON CONFLICT (source_org_id) DO UPDATE SET name = tenants.name
+     RETURNING id`,
+    [PLATFORM_SOURCE_ORG_ID],
+  );
+  platformTenantCache = r.rows[0].id;
+  return platformTenantCache;
+}
+
+export function clearPlatformTenantCache(){
+  platformTenantCache = null;
+}
 
 export function userOrg(userId){
   return db.prepare(
@@ -30,4 +50,5 @@ export async function resolveTenantId(userId){
 
 export function clearTenantCache(){
   cache.clear();
+  platformTenantCache = null;
 }

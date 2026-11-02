@@ -34,7 +34,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // dry-run 不创建 tracking 表，也不写业务表。
   const dry = await migrate({ connectionString, dryRun: true, log: () => {} });
-  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime']);
+  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
   assert.deepEqual(dry.applied, []);
   await withClient(async c => {
     const r = await c.query("SELECT to_regclass('public.schema_migrations') AS t");
@@ -43,16 +43,16 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // 首次执行。
   const first = await migrate({ connectionString, log: () => {} });
-  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime']);
+  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
   assert.deepEqual(first.skipped, []);
 
   // 第二次执行幂等。
   const second = await migrate({ connectionString, log: () => {} });
   assert.deepEqual(second.applied, []);
-  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime']);
+  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
 
   const s = await status({ connectionString });
-  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime']);
+  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime', '0003_p0_3_knowledge_evidence']);
   assert.deepEqual(s.pending, []);
 
   await withClient(async c => {
@@ -67,7 +67,16 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
       'idx_agent_tasks_queue', 'idx_agent_tasks_lease', 'idx_agent_events_task_seq',
       'uq_agent_approvals_pending', 'uq_agent_presets_active_name',
       'uq_agent_tool_calls_idem', 'uq_agent_inputs_pending', 'idx_agent_tasks_retry_due',
+      'uq_agent_evidence_chunk', 'idx_agent_evidence_task_time', 'idx_agent_evidence_doc_version',
+      'idx_skills_tenant_name',
     ]) assert.ok(indexNames.has(idx), `缺少索引 ${idx}`);
+
+    const evidenceCols = await c.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_evidence'",
+    );
+    const evidenceNames = new Set(evidenceCols.rows.map(r => r.column_name));
+    assert.ok(evidenceNames.has('title'));
+    assert.ok(evidenceNames.has('kb_name'));
 
     const triggers = await c.query("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal");
     const triggerNames = new Set(triggers.rows.map(r => r.tgname));

@@ -21,6 +21,19 @@ function parseAdmins(value){
     .filter(Boolean);
 }
 
+function parsePositiveInt(value, fallback, max = Number.MAX_SAFE_INTEGER){
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) return fallback;
+  return Math.min(n, max);
+}
+
+function parseList(value){
+  return String(value || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
 export function parseConfig(env = process.env){
   const nodeEnv = String(env.NODE_ENV || 'development');
   const isProduction = nodeEnv === 'production';
@@ -35,6 +48,19 @@ export function parseConfig(env = process.env){
     // 生产环境始终禁用演示数据；开发环境默认开启，可用 EKH_ENABLE_DEMO_SEED=0 关闭。
     demoSeedEnabled: !isProduction && parseBool(demoFlag, true),
     platformAdminEmails: parseAdmins(env.PLATFORM_ADMIN_EMAILS),
+    knowledge: Object.freeze({
+      candidateLimit: parsePositiveInt(env.EKH_KNOWLEDGE_CANDIDATE_LIMIT ?? env.EKH_KNOWLEDGE_CANDIDATE_CAP, 5000, 100000),
+      topKMax: parsePositiveInt(env.EKH_KNOWLEDGE_TOP_K_MAX, 20, 100),
+      ftsLimit: parsePositiveInt(env.EKH_KNOWLEDGE_FTS_LIMIT, 80, 1000),
+      excerptChars: parsePositiveInt(env.EKH_KNOWLEDGE_EXCERPT_CHARS, 2000, 20000),
+      evidenceMax: parsePositiveInt(env.EKH_KNOWLEDGE_EVIDENCE_MAX, 8, 50),
+      // 服务令牌的 KB 范围；空数组表示不额外收窄（保持旧行为）。
+      serviceKbScope: Object.freeze(parseList(env.EKH_SERVICE_KB_SCOPE)),
+    }),
+    skills: Object.freeze({
+      dir: String(env.EKH_SKILLS_DIR || ''),
+      instructionMaxChars: parsePositiveInt(env.EKH_SKILL_INSTRUCTION_MAX_CHARS, 8000, 100000),
+    }),
   });
 }
 

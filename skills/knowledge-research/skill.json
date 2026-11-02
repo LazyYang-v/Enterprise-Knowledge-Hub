@@ -1,0 +1,20 @@
+{
+  "name": "knowledge-research",
+  "version": "1.0.0",
+  "description": "在用户可见知识库范围内做证据化调研，并输出带引用的结论。",
+  "risk_level": "low",
+  "status": "active",
+  "allowed_tools": [
+    "knowledge.search",
+    "knowledge.get_document",
+    "knowledge.get_citation",
+    "knowledge.list_bases"
+  ],
+  "required_tools": ["knowledge.search"],
+  "instructions": "SKILL.md",
+  "references": [
+    "references/citation-policy.md",
+    "references/query-patterns.md"
+  ],
+  "evals": "evals/cases.json"
+}

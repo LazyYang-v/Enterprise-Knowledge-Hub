@@ -57,6 +57,9 @@ async function main(){
     workerId,
     model: modelFromEnv(),
     log,
+    // 惰性加载：只有带知识范围/Skill 的任务才会触碰 SQLite 与 Skill 仓储。
+    knowledgeFactory: async () => (await import('../server/knowledge/index.js')).getKnowledgeService(),
+    skillLoader: async ref => (await import('../server/skills/index.js')).loadSkillInstructions(ref),
     ...optionsFromEnv(),
   });
   if (!worker.model) log('未配置 EKH_AGENT_MODEL_*，领取到任务后会以 model_unavailable 失败');

@@ -2,15 +2,24 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { db } from './db.js';
-import { retrieve } from './search.js';
+import { retrieveScoped } from './search.js';
 import { isServiceToken, bearerToken } from './service-auth.js';
+import { config } from './config.js';
 
 const MAX_DOC_CHARS = 50000;
+
+function serviceAllowedKbIds(){
+  const all = db.prepare('SELECT id FROM knowledge_bases').all().map(r => r.id);
+  const configured = config.knowledge.serviceKbScope;
+  return configured.length ? configured.filter(id => all.includes(id)) : all;
+}
 
 function refRow(r){
   return {
     chunk_id: r.chunk_id, document_id: r.document_id, kb_id: r.kb_id,
+    document_version: r.document_version, content_hash: r.content_hash,
     doc_name: r.doc_name, kb_name: r.kb_name, idx_in_doc: r.idx,
+    locator: r.locator_json,
     score: Math.round(r.score * 1000) / 1000, content: r.content,
   };
 }
@@ -29,13 +38,13 @@ function getServer(){
   }, async ({ query, kb_ids, top_k }) => {
     const text = String(query || '').trim();
     if (!text) return { content: [{ type: 'text', text: 'query 不能为空' }], isError: true };
-    let ids = db.prepare('SELECT id FROM knowledge_bases').all().map(r => r.id);
+    let ids = serviceAllowedKbIds();
     if (kb_ids?.length) {
       const unknown = kb_ids.filter(id => !ids.includes(id));
-      if (unknown.length) return { content: [{ type: 'text', text: `知识库不存在: ${unknown.join(', ')}` }], isError: true };
+      if (unknown.length) return { content: [{ type: 'text', text: `服务令牌无权访问或知识库不存在: ${unknown.join(', ')}` }], isError: true };
       ids = kb_ids;
     }
-    const refs = ids.length ? await retrieve({ kbIds: ids, query: text, topK: top_k ?? 6 }) : [];
+    const refs = ids.length ? (await retrieveScoped({ kbIds: ids, query: text, topK: top_k ?? 6 })).refs : [];
     const body = refs.length
       ? JSON.stringify({ refs: refs.map(refRow) }, null, 2)
       : '未检索到相关内容。';
@@ -50,13 +59,19 @@ function getServer(){
     },
   }, async ({ document_id }) => {
     const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(String(document_id));
-    if (!doc) return { content: [{ type: 'text', text: '文档不存在' }], isError: true };
-    const chunks = db.prepare('SELECT idx, content FROM chunks WHERE document_id = ? ORDER BY idx').all(doc.id);
+    if (!doc || doc.deleted_at) return { content: [{ type: 'text', text: '文档不存在' }], isError: true };
+    const allowed = serviceAllowedKbIds();
+    if (config.knowledge.serviceKbScope.length && (!doc.kb_id || !allowed.includes(doc.kb_id))){
+      return { content: [{ type: 'text', text: '服务令牌无权访问该文档' }], isError: true };
+    }
+    const version = Number(doc.current_version) || 1;
+    const chunks = db.prepare('SELECT idx, content, content_hash, locator_json FROM chunks WHERE document_id = ? AND document_version = ? ORDER BY idx').all(doc.id, version);
     let text = chunks.map(c => c.content).join('\n\n');
     if (text.length > MAX_DOC_CHARS) text = text.slice(0, MAX_DOC_CHARS) + '\n\n…[已截断]';
     const meta = {
       id: doc.id, name: doc.name, kb_id: doc.kb_id, kind: doc.kind,
-      status: doc.status, chunk_count: doc.chunk_count || chunks.length,
+      status: doc.status, current_version: version, content_hash: doc.content_hash || '',
+      chunk_count: doc.chunk_count || chunks.length,
       created_at: doc.created_at, updated_at: doc.updated_at,
     };
     return { content: [{ type: 'text', text: JSON.stringify({ document: meta, text }, null, 2) }] };

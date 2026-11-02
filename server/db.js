@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { $uuid, $token, hashPassword, now } from './util.js';
+import { runSqliteMigrations } from './sqlite-migrations.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // 允许测试/多实例通过 EKH_DATA_DIR 指定独立数据目录；默认保持 <repo>/data。
@@ -16,7 +17,8 @@ export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
-db.exec(`
+export function applyBaseSchema(target){
+  target.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
@@ -179,6 +181,10 @@ CREATE INDEX IF NOT EXISTS idx_chunks_sess ON chunks(session_id);
 CREATE INDEX IF NOT EXISTS idx_msgs_sess ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(user_id);
 `);
+}
+
+applyBaseSchema(db);
+runSqliteMigrations(db);
 
 export const getSetting = (key, fallback = '') => {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);

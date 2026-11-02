@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { db, UPLOAD_DIR } from '../db.js';
 import { $uuid, now, err, trimTitle, sseInit, sseSend, fixFileName } from '../util.js';
 import { authRequired } from '../auth.js';
-import { retrieve } from '../search.js';
+import { retrieveScoped } from '../search.js';
 import { chatOnce } from '../llm.js';
 import { getModel } from '../model-registry.js';
 import { enqueue } from '../ingest.js';
@@ -13,6 +13,7 @@ import { resolveAgentCustomTools, runCustomTool, toolFnName } from '../custom-to
 import { runAgentLoop } from '../agent/runner.js';
 import { buildChatSystemPrompt } from '../agent/context-builder.js';
 import { docRow } from './kbs.js';
+import { visibleKbIds as visibleKbIdsFor, intersectVisibleKbIds } from '../knowledge/acl.js';
 
 const router = Router();
 router.use(authRequired);
@@ -32,10 +33,22 @@ function messageRow(m){
   return { id: m.id, session_id: m.session_id, role: m.role, content: m.content, think: m.think || '', refs: JSON.parse(m.refs || '[]'), created_at: m.created_at };
 }
 
+// 兼容旧 import：可见性判断统一走 knowledge/acl.js。
 export function visibleKbIds(user){
-  const myOrgs = db.prepare('SELECT org_id FROM org_members WHERE user_id = ?').all(user.id).map(r => r.org_id);
-  const all = db.prepare('SELECT * FROM knowledge_bases').all();
-  return all.filter(kb => kb.owner_id === user.id || (kb.org_id && myOrgs.includes(kb.org_id))).map(kb => kb.id);
+  return visibleKbIdsFor(user.id);
+}
+
+function normalizeKbIds(value){
+  if (value == null) return [];
+  if (!Array.isArray(value)) return null;
+  return [...new Set(value.map(String))];
+}
+
+function assertKbIdsBindable(res, userId, kbIds){
+  if (!kbIds) { err(res, 400, 'kb_ids 必须是数组'); return false; }
+  const { denied } = intersectVisibleKbIds(userId, kbIds);
+  if (denied.length){ err(res, 403, `无权访问知识库: ${denied.join(', ')}`); return false; }
+  return true;
 }
 
 router.get('/sessions', (req, res) => {
@@ -50,9 +63,11 @@ router.post('/sessions', (req, res) => {
     const owned = db.prepare('SELECT id FROM agents WHERE id = ? AND owner_id = ?').get(agent_id, req.user.id);
     if (!owned) return err(res, 403, '无权使用该智能体');
   }
+  const boundKbIds = normalizeKbIds(kb_ids);
+  if (!assertKbIdsBindable(res, req.user.id, boundKbIds)) return;
   const id = $uuid();
   db.prepare('INSERT INTO chat_sessions(id, user_id, title, agent_id, kb_ids, model, mode, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
-    .run(id, req.user.id, String(title).slice(0, 60), agent_id, JSON.stringify(kb_ids || []), String(model || ''), mode === 'qa' ? 'qa' : 'reasoning', now(), now());
+    .run(id, req.user.id, String(title).slice(0, 60), agent_id, JSON.stringify(boundKbIds), String(model || ''), mode === 'qa' ? 'qa' : 'reasoning', now(), now());
   const s = db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id);
   res.json({ session: sessionRow(s) });
 });
@@ -69,7 +84,11 @@ router.put('/sessions/:id', (req, res) => {
   if (!s) return err(res, 404, '会话不存在');
   const { title, kb_ids, mode } = req.body || {};
   if (title != null) db.prepare('UPDATE chat_sessions SET title = ? WHERE id = ?').run(String(title).slice(0, 60) || s.title, s.id);
-  if (kb_ids != null) db.prepare('UPDATE chat_sessions SET kb_ids = ? WHERE id = ?').run(JSON.stringify(kb_ids || []), s.id);
+  if (kb_ids != null){
+    const boundKbIds = normalizeKbIds(kb_ids);
+    if (!assertKbIdsBindable(res, req.user.id, boundKbIds)) return;
+    db.prepare('UPDATE chat_sessions SET kb_ids = ? WHERE id = ?').run(JSON.stringify(boundKbIds), s.id);
+  }
   if (mode != null) db.prepare('UPDATE chat_sessions SET mode = ? WHERE id = ?').run(mode === 'qa' ? 'qa' : 'reasoning', s.id);
   db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now(), s.id);
   const fresh = db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(s.id);
@@ -79,13 +98,11 @@ router.put('/sessions/:id', (req, res) => {
 router.delete('/sessions/:id', (req, res) => {
   const s = db.prepare('SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!s) return err(res, 404, '会话不存在');
-  const docs = db.prepare("SELECT id, path FROM documents WHERE session_id = ?").all(s.id);
+  const docs = db.prepare("SELECT id, path FROM documents WHERE session_id = ? AND deleted_at IS NULL").all(s.id);
   for (const d of docs){
-    db.prepare('DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(d.id);
+    db.prepare("UPDATE documents SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?").run(now(), now(), d.id);
     if (d.path){ try { fs.rmSync(path.dirname(d.path), { recursive: true, force: true }); } catch {} }
   }
-  db.prepare('DELETE FROM documents WHERE session_id = ?').run(s.id);
-  db.prepare('DELETE FROM chunks WHERE session_id = ?').run(s.id);
   db.prepare('DELETE FROM messages WHERE session_id = ?').run(s.id);
   db.prepare('DELETE FROM artifacts WHERE session_id = ?').run(s.id);
   db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(s.id);
@@ -129,7 +146,7 @@ router.post('/sessions/:id/attachments', upload.array('files', 10), (req, res) =
 router.get('/sessions/:id/attachments', (req, res) => {
   const s = db.prepare('SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!s) return err(res, 404, '会话不存在');
-  const docs = db.prepare('SELECT * FROM documents WHERE session_id = ? ORDER BY created_at DESC').all(s.id);
+  const docs = db.prepare('SELECT * FROM documents WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC').all(s.id);
   res.json({ docs: docs.map(docRow) });
 });
 
@@ -168,8 +185,16 @@ router.post('/sessions/:id/chat', async (req, res) => {
     if (row && row.owner_id !== req.user.id) return err(res, 403, '无权使用该智能体');
     agent = row || null;
   }
-  let kbIds = agent ? JSON.parse(agent.kb_ids || '[]') : JSON.parse(s.kb_ids || '[]');
-  if (!agent && !kbIds.length) kbIds = visibleKbIds(req.user); // 未选择知识库时检索全部可见知识库
+  // G1：Agent/会话配置的知识库必须与当前用户可见集合求交集，绝不按声明范围越权检索。
+  let kbIds;
+  if (agent){
+    kbIds = intersectVisibleKbIds(req.user.id, JSON.parse(agent.kb_ids || '[]')).effective;
+  } else {
+    const configured = JSON.parse(s.kb_ids || '[]');
+    kbIds = configured.length
+      ? intersectVisibleKbIds(req.user.id, configured).effective
+      : visibleKbIdsFor(req.user.id); // 未选择知识库时检索全部可见知识库
+  }
   const mode = s.mode === 'qa' ? 'qa' : 'reasoning';
 
   const chatModel = agent?.model
@@ -196,9 +221,9 @@ router.post('/sessions/:id/chat', async (req, res) => {
     // 1. 检索
     let refs = [];
     let webResults = null;
-    const hasKbScope = kbIds.length > 0 || db.prepare("SELECT COUNT(*) c FROM documents WHERE session_id = ? AND status IN ('ready','processing','pending')").get(s.id).c > 0;
+    const hasKbScope = kbIds.length > 0 || db.prepare("SELECT COUNT(*) c FROM documents WHERE session_id = ? AND deleted_at IS NULL AND status IN ('ready','processing','pending')").get(s.id).c > 0;
     if (hasKbScope){
-      refs = await retrieve({ kbIds, sessionId: s.id, query: text, topK: 6 });
+      refs = (await retrieveScoped({ kbIds, sessionId: s.id, query: text, topK: 6 })).refs;
     }
     emit({ type: 'retrieved', count: refs.length });
 
@@ -221,6 +246,8 @@ router.post('/sessions/:id/chat', async (req, res) => {
     const refsOut = refs.map((r, i) => ({
       idx: i + 1, chunk_id: r.chunk_id, document_id: r.document_id,
       doc_name: r.doc_name, kb_name: r.kb_name, idx_in_doc: r.idx,
+      document_version: r.document_version, content_hash: r.content_hash,
+      locator: r.locator_json,
       score: Math.round(r.score * 1000) / 1000, snippet: r.content.slice(0, 160),
     }));
 

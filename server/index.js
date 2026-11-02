@@ -16,3 +16,17 @@ const server = app.listen(config.port, () => {
     console.log('  生产模式：未创建演示账号\n');
   }
 });
+
+// Agent 平台：启动时异步加载平台级 Skill，失败不阻塞 Web 服务。
+if (config.agentPlatformEnabled && config.databaseUrl){
+  import('./skills/index.js')
+    .then(m => m.bootstrapSkills())
+    .then(result => {
+      if (result.errors.length){
+        console.error('[skills] 加载完成但有错误：', JSON.stringify(result.errors));
+      } else {
+        console.log(`[skills] 已加载 ${result.loaded} 个 Skill`);
+      }
+    })
+    .catch(e => console.error('[skills] 初始化失败：', e.message));
+}

@@ -21,13 +21,17 @@ import {
 } from './task-repo.js';
 import { withTransaction } from './pg.js';
 import { DEFAULT_BUDGET, RETRYABLE_ERRORS } from './task-service.js';
+import { config } from '../config.js';
+import { getEvidenceByIds } from './evidence-repo.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const ACTION_INSTRUCTION = [
   '你必须只输出一个 JSON 对象作为本轮动作，不要输出 Markdown 或解释。可用类型：',
   '{"type":"plan","plan_items":[{"item_key":"k1","title":"...","completion_criteria":"..."}]}',
   '{"type":"call_tool","tool_name":"...","arguments":{}}',
   '{"type":"ask_user","question":"...","input_schema":{"type":"object","properties":{"field":{"type":"string","required":true}}}}',
-  '{"type":"finish","summary":"...","artifact_refs":[],"citations":[]}',
+  '{"type":"finish","summary":"...","artifact_refs":[],"citations":["<evidence_id>"]}',
   '{"type":"fail","error_code":"lower_snake_case","message":"..."}',
 ].join('\n');
 
@@ -109,13 +113,13 @@ async function finalizeCancel(task, workerId){
   }));
 }
 
-function buildMessages(goal, plan, history){
+function buildMessages(goal, plan, history, { skill = '', evidence = [] } = {}){
   const planLines = plan.map(p => ({ title: p.title, status: p.status }));
   const system = [
-    buildAgentSystemPrompt({ goal, plan: planLines, evidence: [] }),
+    buildAgentSystemPrompt({ goal, plan: planLines, evidence }),
     ACTION_INSTRUCTION,
   ].join('\n\n');
-  const messages = [{ role: 'system', content: system }, { role: 'user', content: goal }];
+  const messages = [{ role: 'system', content: skill ? `${system}\n\n=== SKILL ===\n${skill}` : system }, { role: 'user', content: goal }];
   for (const m of history){
     if (!m.content) continue;
     messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
@@ -123,14 +127,136 @@ function buildMessages(goal, plan, history){
   return messages;
 }
 
+function locatorText(locator){
+  if (!locator) return '';
+  if (typeof locator === 'string') return locator;
+  const parts = [];
+  if (locator.page != null) parts.push(`第 ${locator.page} 页`);
+  if (locator.sheet) parts.push(`工作表 ${locator.sheet}`);
+  if (locator.slide != null) parts.push(`幻灯片 ${locator.slide}`);
+  if (locator.char_start != null) parts.push(`字符 ${locator.char_start}-${locator.char_end}`);
+  if (!parts.length && locator.chunk_index != null) parts.push(`分块 ${locator.chunk_index}`);
+  return parts.join('，');
+}
+
+function scopeFromSnapshot(snapshot){
+  return {
+    mode: snapshot.mode || 'explicit',
+    kbIds: Array.isArray(snapshot.effective_kb_ids) ? snapshot.effective_kb_ids : [],
+    documentIds: Array.isArray(snapshot.input_doc_ids) ? snapshot.input_doc_ids : [],
+    sessionId: snapshot.session_id || null,
+    versionPolicy: snapshot.version_policy === 'latest' ? 'latest' : 'pin_on_first_use',
+    reducedCount: Number(snapshot.reduced_count) || 0,
+    scopeHash: snapshot.scope_hash || '',
+  };
+}
+
+async function loadSkillInstructions(task, skillLoader){
+  const ref = task.input_json?.skill;
+  if (!ref) return '';
+  if (!skillLoader) throw new TaskExecutionError('skill_unavailable', 'Worker 未配置 Skill 加载器', { retryable: false });
+  try {
+    const loaded = await skillLoader({
+      skillId: ref.id, version: ref.version, contentHash: ref.content_hash,
+    });
+    if (!loaded?.instructions) throw new Error('Skill instructions 为空');
+    return String(loaded.instructions);
+  } catch (e){
+    if (e instanceof TaskExecutionError) throw e;
+    const permanent = e?.code === 'skill_version_conflict' || e?.code === 'skill_unavailable';
+    throw new TaskExecutionError('skill_unavailable', `Skill 加载失败：${e.message}`, { retryable: !permanent });
+  }
+}
+
+async function createKnowledgeContext(task, knowledgeFactory){
+  const snapshot = task.input_json?.knowledge;
+  if (!snapshot) return null;
+  const hasScope = (snapshot.effective_kb_ids?.length || snapshot.input_doc_ids?.length || snapshot.session_id);
+  if (!hasScope) return null; // 空范围任务不加载知识面，保持 Worker 与 SQLite 解耦
+  if (!knowledgeFactory){
+    throw new TaskExecutionError('knowledge_unavailable', 'Worker 未配置知识库服务', { retryable: false });
+  }
+  try {
+    const service = await knowledgeFactory({ task });
+    if (!service) throw new Error('知识库服务不可用');
+    return { service, scope: scopeFromSnapshot(snapshot) };
+  } catch (e){
+    if (e instanceof TaskExecutionError) throw e;
+    throw new TaskExecutionError('knowledge_unavailable', e.message, { retryable: false });
+  }
+}
+
 /**
  * 执行一个已被 Worker 领取的任务。
  * 返回 { status }；可重试错误抛出 TaskExecutionError，由 Worker 决定重试/失败。
  */
-export async function executeTask(task, { workerId, model, signal, log = () => {} } = {}){
+export async function executeTask(task, {
+  workerId, model, signal, log = () => {}, knowledgeFactory = null, skillLoader = null,
+} = {}){
   if (!model) throw new TaskExecutionError('model_unavailable', 'Worker 未配置任务模型', { retryable: false });
   let current = task;
   const budget = budgetOf(current);
+  const evidenceMax = config.knowledge.evidenceMax;
+  const skillInstructions = await loadSkillInstructions(current, skillLoader);
+  const knowledge = await createKnowledgeContext(current, knowledgeFactory);
+  let evidenceForPrompt = [];
+  const evidenceIds = new Set();
+  let retrievalCount = 0;
+  let refreshPending = true;
+
+  async function retrieveForPrompt(taskObj, plan){
+    if (!knowledge || retrievalCount >= 2 || !(retrievalCount === 0 || refreshPending)) return;
+    refreshPending = false;
+    const query = retrievalCount === 0
+      ? taskObj.goal
+      : [taskObj.goal, ...plan.map(p => p.title)].join('\n');
+    retrievalCount += 1;
+    let result;
+    try {
+      result = await knowledge.service.search({
+        actor: { userId: taskObj.owner_id, tenantId: taskObj.tenant_id, principalType: 'user' },
+        scope: knowledge.scope,
+        query,
+        topK: evidenceMax,
+        taskId: taskObj.id,
+      });
+    } catch (e){
+      if (e instanceof TaskExecutionError) throw e;
+      throw new TaskExecutionError('knowledge_unavailable', `知识检索失败：${e.message}`, {
+        retryable: e?.retryable !== false,
+      });
+    }
+    evidenceForPrompt = result.evidence.map(e => ({
+      evidence_id: e.evidence_id,
+      title: e.title,
+      kb_name: e.kb_name,
+      document_version: e.document_version,
+      locator: locatorText(e.locator),
+      excerpt: e.excerpt,
+    }));
+    for (const e of result.evidence){
+      if (e.evidence_id) evidenceIds.add(e.evidence_id);
+    }
+    if (result.newEvidence.length){
+      await emit(taskObj, 'evidence.retrieved', {
+        count: result.evidence.length,
+        new_count: result.newEvidence.length,
+        evidence_ids: result.evidence.map(e => e.evidence_id).filter(Boolean),
+        degraded: !!result.degraded,
+        capped: !!result.candidateCapped,
+      }, 'system');
+    }
+    for (const change of result.versionChanges || []){
+      await emit(taskObj, 'evidence.version_changed', change, 'system');
+    }
+    const baseReduced = Number(knowledge.scope.reducedCount) || 0;
+    if (result.reducedCount > baseReduced){
+      await emit(taskObj, 'policy.scope_reduced', {
+        reduced_count: result.reducedCount, source: 'runtime',
+      }, 'system');
+    }
+  }
+
   const usage = {
     steps: Number(current.usage_json?.steps || 0),
     model_calls: Number(current.usage_json?.model_calls || 0),
@@ -168,8 +294,11 @@ export async function executeTask(task, { workerId, model, signal, log = () => {
     let raw;
     try {
       const plan = await listPlanItems(current.tenant_id, current.id);
+      await retrieveForPrompt(current, plan);
       const history = await listMessages(current.tenant_id, current.id, 20);
-      const messages = buildMessages(current.goal, plan, history);
+      const messages = buildMessages(current.goal, plan, history, {
+        skill: skillInstructions, evidence: evidenceForPrompt,
+      });
       const timeoutSignal = AbortSignal.timeout(budget.model_timeout_ms);
       const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
       raw = await completeModel(model, messages, { temperature: 0.2, signal: combined });
@@ -232,6 +361,7 @@ export async function executeTask(task, { workerId, model, signal, log = () => {
           state: { plan_version: current.plan_version, usage },
         });
         log(`task ${current.id} plan v${current.plan_version}`);
+        refreshPending = true; // 首次 plan 后允许再检索一次（goal + plan titles）
         continue;
       }
       case 'ask_user': {
@@ -256,10 +386,31 @@ export async function executeTask(task, { workerId, model, signal, log = () => {
         return { status: 'waiting_input' };
       }
       case 'finish': {
+        const citationIds = [...new Set(action.citations || [])];
+        if (citationIds.length){
+          const invalid = citationIds.filter(id => !UUID_RE.test(id));
+          if (invalid.length){
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
+            throw new TaskExecutionError('model_invalid_output', 'citations 含非法的 evidence_id', { retryable: true });
+          }
+          let rows;
+          try {
+            rows = await getEvidenceByIds({
+              tenantId: current.tenant_id, taskId: current.id, ids: citationIds,
+            });
+          } catch (e){
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'knowledge_unavailable' });
+            throw new TaskExecutionError('knowledge_unavailable', `引用校验失败：${e.message}`, { retryable: true });
+          }
+          if (rows.length !== citationIds.length){
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'failed', errorCode: 'model_invalid_output' });
+            throw new TaskExecutionError('model_invalid_output', 'citations 引用了不属于本任务的证据', { retryable: true });
+          }
+        }
         await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, status: 'completed' });
         await saveCheckpoint({
           tenantId: current.tenant_id, taskId: current.id, stepSeq: Number(step.seq),
-          state: { finished: true, summary: action.summary, usage },
+          state: { finished: true, summary: action.summary, citations: citationIds, usage },
         });
         await withTransaction(client => transitionTask(client, {
           tenantId: current.tenant_id, taskId: current.id, workerId,
@@ -270,7 +421,10 @@ export async function executeTask(task, { workerId, model, signal, log = () => {
             lease_owner: null, lease_expires_at: null,
           },
           eventType: 'task.completed',
-          eventPayload: { summary: action.summary, artifact_ids: action.artifact_refs },
+          eventPayload: {
+            summary: action.summary, artifact_ids: action.artifact_refs,
+            citations: citationIds, evidence_ids: [...evidenceIds],
+          },
           actorType: 'model',
         }));
         return { status: 'completed' };

@@ -85,19 +85,29 @@ export async function appendEvent(client, { tenantId, taskId, type, payload = {}
   return seq;
 }
 
-export async function createTask({ tenantId, ownerId, title, goal, input = {}, budget = {}, priority = 100, maxAttempts = 5, actorId = null }){
+export async function createTask({
+  tenantId, ownerId, title, goal, input = {}, budget = {}, priority = 100,
+  maxAttempts = 5, actorId = null, presetId = null, presetVersion = null, extraEvents = [],
+} = {}){
   return withTransaction(async client => {
     const inserted = await client.query(
-      `INSERT INTO agent_tasks (tenant_id, owner_id, title, goal, input_json, budget_json, priority, max_attempts)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+      `INSERT INTO agent_tasks (tenant_id, owner_id, preset_id, preset_version, title, goal, input_json, budget_json, priority, max_attempts)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
        RETURNING *`,
-      [tenantId, ownerId, title, goal, JSON.stringify(input), JSON.stringify(budget), priority, maxAttempts],
+      [tenantId, ownerId, presetId, presetVersion, title, goal, JSON.stringify(input), JSON.stringify(budget), priority, maxAttempts],
     );
     const taskId = inserted.rows[0].id;
     await appendEvent(client, {
       tenantId, taskId, type: 'task.created', actorType: 'user', actorId: actorId || ownerId,
-      payload: { title, preset_id: input.preset_id || null },
+      payload: { title, preset_id: presetId || null },
     });
+    for (const ev of extraEvents || []){
+      if (!ev || !ev.type) continue;
+      await appendEvent(client, {
+        tenantId, taskId, type: String(ev.type), payload: ev.payload || {},
+        actorType: ev.actorType || 'system', actorId: ev.actorId || null,
+      });
+    }
     await appendEvent(client, {
       tenantId, taskId, type: 'task.queued', actorType: 'system',
       payload: { reason: 'created' },

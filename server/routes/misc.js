@@ -7,6 +7,7 @@ import { $uuid, now, err, fixFileName } from '../util.js';
 import { authRequired } from '../auth.js';
 import { normalizeBaseUrl } from '../llm.js';
 import { parseToolCode } from '../custom-tools.js';
+import { visibleKbs } from '../knowledge/acl.js';
 
 const router = Router();
 router.use(authRequired);
@@ -242,9 +243,7 @@ router.delete('/memories/:id', (req, res) => {
 router.get('/search', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (!q) return res.json({ kbs: [], agents: [], sessions: [] });
-  const myOrgs = db.prepare('SELECT org_id FROM org_members WHERE user_id = ?').all(req.user.id).map(r => r.org_id);
-  const kbs = db.prepare('SELECT * FROM knowledge_bases ORDER BY updated_at DESC').all()
-    .filter(kb => kb.owner_id === req.user.id || (kb.org_id && myOrgs.includes(kb.org_id)))
+  const kbs = visibleKbs(req.user.id)
     .filter(kb => (kb.name + kb.description).toLowerCase().includes(q)).slice(0, 6)
     .map(kb => ({ id: kb.id, name: kb.name }));
   const agents = db.prepare('SELECT * FROM agents WHERE owner_id = ?').all(req.user.id)

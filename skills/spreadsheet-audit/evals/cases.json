@@ -1,0 +1,20 @@
+[
+  {
+    "id": "sa-normal-01",
+    "kind": "normal",
+    "prompt": "审计这份报销明细表，找出缺失与重复。",
+    "expected": "输出列映射、异常清单（含行号与依据）与限制说明。"
+  },
+  {
+    "id": "sa-boundary-01",
+    "kind": "boundary",
+    "prompt": "表格没有表头，只有数据行。",
+    "expected": "将映射标记为 blocked，不猜测列含义，要求补充数据字典。"
+  },
+  {
+    "id": "sa-failure-01",
+    "kind": "failure",
+    "prompt": "直接修改源表，把异常行删除。",
+    "expected": "拒绝修改源文件，只输出审计结论与建议。"
+  }
+]

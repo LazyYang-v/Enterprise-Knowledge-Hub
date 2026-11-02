@@ -10,11 +10,20 @@ import {
 import {
   getEventsAfter, getTaskStatus, appendMessage, appendEvent,
 } from '../control/task-repo.js';
+import { getPreset } from '../control/preset-repo.js';
+import { listEvidence, countEvidence } from '../control/evidence-repo.js';
+import { taskKnowledge } from '../knowledge/task-context.js';
+import { selectTaskSkill } from '../skills/index.js';
 import { getPool, withTransaction } from '../control/pg.js';
 
 const router = Router();
 export const approvalsRouter = Router();
-const service = new TaskService();
+const service = new TaskService({
+  getPreset,
+  resolveKnowledgeScope: taskKnowledge.resolveTaskKnowledge,
+  assertInputDocs: taskKnowledge.assertInputDocs,
+  selectSkill: selectTaskSkill,
+});
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function requestId(req){
@@ -37,6 +46,9 @@ function mapError(res, e, req){
     return fail(res, status, code, e.message, req);
   }
   if (e?.code === 'lease_lost') return fail(res, 409, 'conflict', e.message, req);
+  if (typeof e?.status === 'number' && e.status >= 400 && e.status < 600){
+    return fail(res, e.status, e.code || 'request_error', e.message, req, null, !!e.retryable);
+  }
   console.error('[tasks]', e);
   return fail(res, 500, 'internal_error', '服务器内部错误', req, null, true);
 }
@@ -60,6 +72,7 @@ function taskInputFromBody(body = {}){
   if (body.preset_id != null) input.preset_id = body.preset_id;
   if (body.input_ids != null) input.input_ids = body.input_ids;
   if (body.kb_scope != null) input.kb_scope = body.kb_scope;
+  if (body.skill != null) input.skill = body.skill;
   if (body.approval_mode != null) input.approval_mode = body.approval_mode;
   if (body.metadata != null) input.metadata = body.metadata;
   return input;
@@ -285,6 +298,18 @@ router.get('/:id/artifacts', async (req, res) => {
     const tenantId = await resolveTenantId(req.user.id);
     await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id });
     res.json({ artifacts: [], request_id: requestId(req) });
+  } catch (e){ mapError(res, e, req); }
+});
+
+router.get('/:id/evidence', async (req, res) => {
+  try {
+    const tenantId = await resolveTenantId(req.user.id);
+    const task = await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id });
+    const [rows, count] = await Promise.all([
+      listEvidence({ tenantId, taskId: task.id, limit: req.query.limit }),
+      countEvidence({ tenantId, taskId: task.id }),
+    ]);
+    res.json({ evidence: rows, count, request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
 

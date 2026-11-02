@@ -32,12 +32,16 @@ export class TaskWorker {
     workerId = `worker-${crypto.randomUUID()}`,
     model = null,
     service = new TaskService(),
+    knowledgeFactory = null,
+    skillLoader = null,
     log = msg => console.log(`[worker ${workerId}] ${msg}`),
     ...options
   } = {}){
     this.workerId = workerId;
     this.model = model;
     this.service = service;
+    this.knowledgeFactory = knowledgeFactory;
+    this.skillLoader = skillLoader;
     this.log = log;
     this.options = { ...DEFAULT_WORKER_OPTIONS, ...options };
     this.running = false;
@@ -117,6 +121,8 @@ export class TaskWorker {
       const result = await executeTask(task, {
         workerId: this.workerId, model: this.model, signal: abort.signal,
         log: msg => this.log(msg),
+        knowledgeFactory: this.knowledgeFactory,
+        skillLoader: this.skillLoader,
       });
       if (result.status === 'aborted'){
         this.log(`task ${task.id} aborted`);

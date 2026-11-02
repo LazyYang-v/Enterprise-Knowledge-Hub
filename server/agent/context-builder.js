@@ -44,7 +44,8 @@ export function buildAgentEvidenceSection(evidence = []){
   const body = evidence.map((e, i) => {
     const source = [e.title, e.kb_name, e.document_version != null ? `版本 ${e.document_version}` : '', e.locator]
       .filter(Boolean).join('，');
-    return `[E${i + 1}] 来源：${source || '未知'}\n${e.excerpt || e.content || ''}`;
+    const id = e.evidence_id ? `（evidence_id: ${e.evidence_id}）` : '';
+    return `[E${i + 1}]${id} 来源：${source || '未知'}\n${e.excerpt || e.content || ''}`;
   }).join('\n\n');
   return wrapUntrusted(body, 'EVIDENCE');
 }

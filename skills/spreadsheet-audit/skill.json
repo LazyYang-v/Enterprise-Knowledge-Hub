@@ -1,0 +1,19 @@
+{
+  "name": "spreadsheet-audit",
+  "version": "1.0.0",
+  "description": "对表格数据做列映射、异常识别与审计说明（依赖 P0-4 文件/表格工具，P0-3 仅可查看）。",
+  "risk_level": "medium",
+  "status": "active",
+  "allowed_tools": [
+    "file.read",
+    "spreadsheet.read",
+    "knowledge.search"
+  ],
+  "required_tools": ["file.read", "spreadsheet.read"],
+  "instructions": "SKILL.md",
+  "references": [
+    "references/column-mapping.md",
+    "references/anomaly-taxonomy.md"
+  ],
+  "evals": "evals/cases.json"
+}

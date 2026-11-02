@@ -14,6 +14,7 @@ import {
   listInFlightToolCalls,
 } from './task-repo.js';
 import { withTransaction, getPool } from './pg.js';
+import { countEvidence } from './evidence-repo.js';
 
 export class TaskValidationError extends Error {
   constructor(message){
@@ -82,15 +83,50 @@ function assertGoal(goal){
   return value;
 }
 
+const KB_SCOPE_MODES = new Set(['visible', 'explicit', 'preset', 'none']);
+
+function normalizeKbScope(raw){
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new TaskValidationError('kb_scope 必须是对象');
+  const mode = raw.mode == null ? null : raw.mode;
+  if (mode != null && !KB_SCOPE_MODES.has(mode)) throw new TaskValidationError('kb_scope.mode 不合法');
+  let kbIds = null;
+  if (raw.kb_ids != null){
+    if (!Array.isArray(raw.kb_ids) || raw.kb_ids.length > 50) throw new TaskValidationError('kb_scope.kb_ids 最多 50 项');
+    kbIds = [...new Set(raw.kb_ids.map(String).filter(Boolean))];
+    if (mode === 'explicit' && kbIds.length === 0) throw new TaskValidationError('explicit 模式必须提供 kb_ids');
+  }
+  const versionPolicy = raw.version_policy == null ? 'pin_on_first_use' : raw.version_policy;
+  if (!['pin_on_first_use', 'latest'].includes(versionPolicy)) throw new TaskValidationError('kb_scope.version_policy 不合法');
+  return { mode, kb_ids: kbIds, version_policy: versionPolicy };
+}
+
+function normalizeSkill(raw){
+  if (typeof raw === 'string'){
+    const ref = raw.trim();
+    if (!ref || ref.length > 200) throw new TaskValidationError('skill 不合法');
+    return { ref };
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)){
+    const out = {};
+    for (const key of ['ref', 'id', 'name', 'version', 'content_hash']){
+      if (raw[key] != null){
+        if (typeof raw[key] !== 'string' || raw[key].length > 200) throw new TaskValidationError(`skill.${key} 不合法`);
+        out[key] = raw[key];
+      }
+    }
+    if (!out.ref && !out.id && !out.name) throw new TaskValidationError('skill 需要 name 或 id');
+    return out;
+  }
+  throw new TaskValidationError('skill 必须是字符串或对象');
+}
+
 function pickInput(raw){
   if (raw == null) return {};
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new TaskValidationError('input 必须是对象');
   const out = {};
   if (raw.preset_id != null) out.preset_id = String(raw.preset_id);
-  if (raw.kb_scope != null){
-    if (typeof raw.kb_scope !== 'object' || Array.isArray(raw.kb_scope)) throw new TaskValidationError('kb_scope 必须是对象');
-    out.kb_scope = raw.kb_scope;
-  }
+  if (raw.kb_scope != null) out.kb_scope = normalizeKbScope(raw.kb_scope);
+  if (raw.skill != null) out.skill = normalizeSkill(raw.skill);
   if (raw.approval_mode != null){
     if (!['risk_based', 'never', 'always'].includes(raw.approval_mode)) throw new TaskValidationError('approval_mode 不合法');
     out.approval_mode = raw.approval_mode;
@@ -116,8 +152,15 @@ function isoOrNull(v){
 }
 
 export class TaskService {
-  constructor({ defaultBudget = DEFAULT_BUDGET } = {}){
+  constructor({
+    defaultBudget = DEFAULT_BUDGET,
+    getPreset = null, resolveKnowledgeScope = null, assertInputDocs = null, selectSkill = null,
+  } = {}){
     this.defaultBudget = { ...defaultBudget };
+    this.getPreset = getPreset;
+    this.resolveKnowledgeScope = resolveKnowledgeScope;
+    this.assertInputDocs = assertInputDocs;
+    this.selectSkill = selectSkill;
   }
 
   async createTask({ tenantId, ownerId, goal, title = '', input = {}, budget = {}, priority = 100 }){
@@ -128,10 +171,62 @@ export class TaskService {
     if (!Number.isInteger(priority) || priority < 0 || priority > 1000){
       throw new TaskValidationError('priority 必须是 0-1000 的整数');
     }
+
+    let preset = null;
+    const extraEvents = [];
+    if (this.getPreset && safeInput.preset_id){
+      preset = await this.getPreset({ tenantId, presetId: safeInput.preset_id });
+      if (!preset) throw new TaskValidationError('预设不存在');
+      if (preset.status !== 'active') throw new TaskValidationError('预设不可用');
+    }
+    if (this.assertInputDocs){
+      await this.assertInputDocs({ userId: ownerId, inputIds: safeInput.input_ids || [] });
+    }
+    if (this.resolveKnowledgeScope){
+      safeInput.knowledge = await this.resolveKnowledgeScope({
+        tenantId, ownerId, preset,
+        kbScope: safeInput.kb_scope || null,
+        inputDocIds: safeInput.input_ids || [],
+      });
+      if (safeInput.knowledge.reduced_count > 0){
+        extraEvents.push({
+          type: 'policy.scope_reduced',
+          payload: {
+            reduced_count: safeInput.knowledge.reduced_count,
+            source: preset ? 'preset' : 'visible',
+          },
+        });
+      }
+    }
+    if (this.selectSkill){
+      const rawSkill = safeInput.skill;
+      const skillRef = rawSkill && typeof rawSkill === 'object' && rawSkill.ref ? rawSkill.ref : rawSkill;
+      const selected = await this.selectSkill({
+        tenantId, userId: ownerId,
+        skillRef,
+        presetId: preset?.id || null,
+      });
+      if (selected){
+        safeInput.skill = {
+          id: selected.skill_id, name: selected.name, version: selected.version,
+          content_hash: selected.content_hash,
+        };
+        extraEvents.push({
+          type: 'skill.selected',
+          payload: { skill_id: selected.skill_id, name: selected.name, version: selected.version },
+        });
+      } else {
+        delete safeInput.skill;
+      }
+    }
+
     return repoCreateTask({
       tenantId, ownerId, title: safeTitle, goal: safeGoal,
       input: safeInput, budget: mergedBudget, priority,
       actorId: ownerId,
+      presetId: preset?.id || null,
+      presetVersion: preset?.config_version || null,
+      extraEvents,
     });
   }
 
@@ -159,11 +254,12 @@ export class TaskService {
 
   async snapshot({ tenantId, taskId, userId, isAdmin = false }){
     const task = await this.getTaskForUser({ tenantId, taskId, userId, isAdmin });
-    const [plan, pendingInput, checkpoint, steps] = await Promise.all([
+    const [plan, pendingInput, checkpoint, steps, evidenceCount] = await Promise.all([
       listPlanItems(tenantId, taskId),
       getPendingInput(tenantId, taskId),
       getLatestCheckpoint(tenantId, taskId),
       this._recentSteps(tenantId, taskId),
+      countEvidence({ tenantId, taskId }),
     ]);
     const lastStep = steps[0] || null;
     return {
@@ -172,6 +268,9 @@ export class TaskService {
       goal: task.goal,
       status: task.status,
       preset: task.preset_id ? { id: task.preset_id, version: task.preset_version } : null,
+      knowledge: task.input_json?.knowledge || null,
+      skill: task.input_json?.skill || null,
+      evidence_count: evidenceCount,
       plan: plan.map(p => ({
         item_key: p.item_key, title: p.title, description: p.description,
         status: p.status, depends_on: p.depends_on,

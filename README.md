@@ -39,7 +39,7 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
 
-## P0-0 / P0-1 / P0-2：测试、Runtime 解耦与任务持久化
+## P0-0 / P0-1 / P0-2 / P0-3：测试、Runtime、任务持久化与知识版本
 
 本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成：
 
@@ -69,6 +69,16 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 - 20 次 `kill -9` 恢复测试（`test/pg/task-kill-recovery.test.js`）
 - 特性开关 `AGENT_PLATFORM_ENABLED` 默认关闭，关闭时不连接 PostgreSQL
 
+**P0-3 知识与 Skills**
+
+- `server/knowledge/`：统一 ACL（G1）、SQL 下推的受控混合检索（G10）、文档版本/哈希（G9）
+- `KnowledgeService`：`listBases / resolveScope / search / getDocument / getChunk / getCitation / getVersion`
+- 文档重解析生成新版本，旧分块保留；删除改为软删除，历史引用仍可回读
+- 证据快照写入 PostgreSQL `agent_evidence`，幂等去重；`finish.citations` 必须是本任务证据
+- 任务创建时快照知识范围（`input_json.knowledge`）；执行器每次检索重新校验 ACL，最多自动检索两次
+- SkillRegistry：`skill.json` + `SKILL.md` + references + evals；内置 `knowledge-research`、`spreadsheet-audit`
+- 新 API：`/api/knowledge/*`、`/api/skills`、`GET /api/tasks/:id/evidence`（均受特性开关控制）
+
 ```bash
 npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
 npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
@@ -79,9 +89,11 @@ npm run worker           # 另开终端：领取 Agent 任务（需 AGENT_PLATFO
 npm run repro:baseline   # 生成当前行为快照（会覆盖 docs/baseline）
 ```
 
-P0-2 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`）；工具调用在 P0-4 接入前会返回 `tool_unavailable`。
+P0-2/P0-3 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`）；工具调用在 P0-4 接入前会返回 `tool_unavailable`。
 
-详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`。
+> Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`（SQLite 知识面）。首次对现有 `data/app.db` 运行 P0-3 代码前请先备份；SQLite 迁移只增列/表，但备份是回滚前提。
+
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`。
 
 
 ## 配置模型
@@ -109,14 +121,18 @@ P0-2 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`�
 │   ├── db.js              SQLite 初始化、建表、种子
 │   ├── auth.js            注册 / 登录 / 令牌认证中间件
 │   ├── parse.js           多格式文本抽取 + 分块
-│   ├── ingest.js          解析 → 分块 → 向量化摄取管线（进程内队列）
-│   ├── search.js          混合检索（FTS5 trigram + 向量余弦）
+│   ├── ingest.js          解析 → 分块 → 向量化摄取管线（版本化）
+│   ├── search.js          兼容导出：混合检索（实现位于 knowledge/retrieval.js）
+│   ├── sqlite-migrations.js SQLite PRAGMA user_version 迁移（P0-3）
+│   ├── knowledge/         ACL、受控检索、KnowledgeService、版本与引用
+│   ├── skills/            Skill manifest 校验、Registry、密钥扫描
 │   ├── llm.js             OpenAI 兼容客户端（流式对话 / Embeddings）
 │   ├── custom-tools.js    自定义工具：上传 JS 的沙箱解析与执行
-│   ├── control/           控制面 PostgreSQL 连接与迁移执行器
+│   ├── control/           PostgreSQL 控制面（任务/证据/审计/预设/Skill 仓储）
 │   ├── seed-demo.js       演示数据
-│   └── routes/            kbs（知识库+文档）、chat（会话+SSE）、agents、orgs、misc（产物/工具/模型/记忆/搜索）
-├── migrations/            控制面 SQL 迁移（P0-0 起）
+│   └── routes/            kbs、chat、agents、orgs、misc、tasks、knowledge、skills
+├── skills/                内置 Skill（manifest/instructions/references/evals）
+├── migrations/            控制面 SQL 迁移（P0-0 起，P0-3 为 0003）
 ├── test/                  node:test 单元、集成、PostgreSQL 测试
 ├── scripts/               迁移 CLI、C1–C8 基线复现
 ├── docs/                  威胁模型、数据分类、保留策略、ADR、Runbook、基线报告
@@ -132,7 +148,10 @@ P0-2 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`�
 
 ### 关键设计
 
-- **混合检索**：查询拆成滑动 trigram 做 FTS5 OR 匹配，以 bm25 归一化为关键词分；配置 Embedding 模型后与向量余弦按 0.45 / 0.55 加权融合。未选中知识库时默认检索全部可见知识库。
+- **混合检索**：查询拆成滑动 trigram 做 FTS5 OR 匹配，以 bm25 归一化为关键词分；配置 Embedding 模型后与向量余弦按 0.45 / 0.55 加权融合。范围、删除、版本条件全部下推到 SQL，候选默认上限 5000，topK 上限 20。未选中知识库时默认检索全部可见知识库。
+- **知识 ACL**：知识库按「所有者 / 空间角色」判定可见性；聊天、Agent、任务范围都调用同一 `intersectVisibleKbIds`，历史越权绑定不会泄露。
+- **版本与引用**：重解析生成 `document_version`，旧分块保留；证据快照记录版本、哈希与 locator，引用不随文档更新漂移。
+- **Skill**：平台级 JSON manifest，内容哈希固定版本；同版本内容变化必须升版本。P0-3 只提供 `knowledge.*` 能力，`spreadsheet-audit` 可查看但不可选。
 - **摄取管线**：上传后台异步处理（解析 → 段落聚合分块约 520 字符带重叠 → 向量化），文档状态 `pending / processing / ready / failed`，前端轮询刷新，失败可一键重建。
 - **SSE 对话**：`POST /api/sessions/:id/chat` 返回事件流（`meta` 引用与思考摘要 → `delta` 增量 → `done` 落库消息），客户端断开自动中止上游生成。
 - **权限模型**：知识库按「所有者 / 空间角色」判定可见性与写权限；Viewer 只读、Contributor 可上传、Admin/Owner 可管理、仅创建者可删除。
@@ -154,6 +173,12 @@ GET|POST /api/orgs                        POST /api/orgs/join
 GET|POST /api/models                      POST /api/models/test
 GET|POST /api/artifacts                   GET|PUT /api/tools
 GET|POST /api/memories                    GET /api/search?q=（⌘K）
+POST /api/tasks                           GET /api/tasks/:id
+GET /api/tasks/:id/events（SSE）          GET /api/tasks/:id/evidence
+POST /api/knowledge/search                GET /api/knowledge/bases
+GET /api/knowledge/documents/:id          GET /api/knowledge/citations/:id
+GET /api/knowledge/versions/:id           GET /api/skills
+POST /api/skills/reload（PlatformAdmin）
 ```
 
 ## 参考与致谢
