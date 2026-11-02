@@ -6,16 +6,21 @@ import { db, UPLOAD_DIR } from '../db.js';
 import { $uuid, now, err, trimTitle, sseInit, sseSend, fixFileName } from '../util.js';
 import { authRequired } from '../auth.js';
 import { retrieve } from '../search.js';
-import { streamChat, chatOnce, getModel } from '../llm.js';
+import { chatOnce, getModel } from '../llm.js';
 import { enqueue } from '../ingest.js';
 import { resolveAgentCustomTools, runCustomTool, toolFnName } from '../custom-tools.js';
+import { runAgentLoop } from '../agent/runner.js';
+import { buildChatSystemPrompt } from '../agent/context-builder.js';
 import { docRow } from './kbs.js';
 
 const router = Router();
 router.use(authRequired);
 
 function sessionRow(s){
-  const agent = s.agent_id ? db.prepare('SELECT id, name, color FROM agents WHERE id = ?').get(s.agent_id) : null;
+  // G2：只展示当前用户自己的智能体，避免会话回显他人的 agent 元数据。
+  const agent = s.agent_id
+    ? db.prepare('SELECT id, name, color FROM agents WHERE id = ? AND owner_id = ?').get(s.agent_id, s.user_id)
+    : null;
   return {
     id: s.id, title: s.title, agent_id: s.agent_id, agent: agent || null,
     kb_ids: JSON.parse(s.kb_ids || '[]'), model: s.model, mode: s.mode,
@@ -39,6 +44,11 @@ router.get('/sessions', (req, res) => {
 
 router.post('/sessions', (req, res) => {
   const { title = '新对话', kb_ids = [], agent_id = null, mode = 'reasoning', model = '' } = req.body || {};
+  // G2：会话只能绑定当前用户自己的智能体。
+  if (agent_id){
+    const owned = db.prepare('SELECT id FROM agents WHERE id = ? AND owner_id = ?').get(agent_id, req.user.id);
+    if (!owned) return err(res, 403, '无权使用该智能体');
+  }
   const id = $uuid();
   db.prepare('INSERT INTO chat_sessions(id, user_id, title, agent_id, kb_ids, model, mode, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
     .run(id, req.user.id, String(title).slice(0, 60), agent_id, JSON.stringify(kb_ids || []), String(model || ''), mode === 'qa' ? 'qa' : 'reasoning', now(), now());
@@ -150,7 +160,13 @@ router.post('/sessions/:id/chat', async (req, res) => {
   const text = String(message).trim();
   if (!text) return err(res, 400, '消息不能为空');
 
-  const agent = s.agent_id ? db.prepare('SELECT * FROM agents WHERE id = ?').get(s.agent_id) : null;
+  // G2：会话里的 agent_id 必须属于当前用户；已删除的智能体按旧行为回退到会话配置。
+  let agent = null;
+  if (s.agent_id){
+    const row = db.prepare('SELECT * FROM agents WHERE id = ?').get(s.agent_id);
+    if (row && row.owner_id !== req.user.id) return err(res, 403, '无权使用该智能体');
+    agent = row || null;
+  }
   let kbIds = agent ? JSON.parse(agent.kb_ids || '[]') : JSON.parse(s.kb_ids || '[]');
   if (!agent && !kbIds.length) kbIds = visibleKbIds(req.user); // 未选择知识库时检索全部可见知识库
   const mode = s.mode === 'qa' ? 'qa' : 'reasoning';
@@ -213,26 +229,15 @@ router.post('/sessions/:id/chat', async (req, res) => {
         (refs.length ? `相似度最高的片段来自《${refs[0].doc_name}》。` : '')
       : '未从知识库检索到相关内容，将直接回答。';
 
-    // 3. 组装 prompt
+    // 3. 组装 prompt（ContextBuilder 保持旧聊天提示词逐字兼容）
     const memories = db.prepare('SELECT content FROM memories WHERE user_id = ? ORDER BY created_at DESC LIMIT 20').all(req.user.id);
-    const contextBlocks = refs.map((r, i) =>
-      `[${i + 1}] 来源：《${r.doc_name}》${r.kb_name ? '（' + r.kb_name + '）' : ''}\n${r.content}`
-    );
-    const webBlocks = (webResults || []).map((w, i) =>
-      `[网${i + 1}] 来源：${w.title}（${w.url}）\n${w.content}`
-    );
-    const sysLines = [];
-    if (agent?.system_prompt) sysLines.push(agent.system_prompt);
-    if (mode === 'reasoning'){
-      sysLines.push('你是企业知识库智能助手。请逐步分析用户的问题，结合提供的资料给出准确、结构化的回答；先给出结论，再展开说明。');
-    } else {
-      sysLines.push('你是企业知识库助手。请依据提供的资料简洁准确地回答用户问题。');
-    }
-    sysLines.push('回答使用简体中文。若引用了下方资料，请在对应句子末尾标注编号（如 [1]、[2]）；若资料不足以回答，请如实说明，不要编造。');
-    if (contextBlocks.length) sysLines.push('\n=== 知识库资料 ===\n' + contextBlocks.join('\n\n'));
-    if (webBlocks.length) sysLines.push('\n=== 网络搜索结果 ===\n' + webBlocks.join('\n\n'));
-    if (memories.length) sysLines.push('\n=== 用户长期记忆（可参考） ===\n' + memories.map(m => '- ' + m.content).join('\n'));
-    const system = sysLines.join('\n');
+    const system = buildChatSystemPrompt({
+      agentPrompt: agent?.system_prompt || '',
+      mode,
+      refs,
+      webResults: webResults || [],
+      memories,
+    });
 
     const history = db.prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 11').all(s.id).reverse();
     const llmMessages = [
@@ -254,36 +259,26 @@ router.post('/sessions/:id/chat', async (req, res) => {
       emit({ type: 'delta', text: answer });
     } else {
       emit({ type: 'meta', think, refs: refsOut });
-      const msgs = [...llmMessages];
-      let iter = 0;
       try {
-        while (true){
-          const stream = streamChat(chatModel, msgs, { temperature: mode === 'reasoning' ? 0.6 : 0.3, signal: abortStream.signal, tools: openaiTools.length ? openaiTools : undefined });
-          let pending = null;
-          let iterText = '';
-          for await (const part of stream){
-            if (aborted) break;
-            if (part.toolCalls){ pending = part.toolCalls; continue; }
-            if (part.text){ iterText += part.text; answer += part.text; emit({ type: 'delta', text: part.text }); }
-          }
-          if (!pending || !pending.length || aborted || ++iter >= 6) break;
-          // 为每次调用分配 id，保证 assistant.tool_calls 与 tool 消息一一对应
-          const calls = pending.map(c => ({ id: c.id || 'call_' + $uuid().replace(/-/g, '').slice(0, 12), name: c.name, arguments: c.arguments || '{}' }));
-          msgs.push({
-            role: 'assistant',
-            content: iterText || null,
-            tool_calls: calls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
-          });
-          for (const c of calls){
-            const row = toolByFnName.get(c.name);
-            if (!row) continue;
-            emit({ type: 'tool', name: row.name, args: c.arguments });
-            const result = await runCustomTool(row, c.arguments);
+        // 模型—工具循环抽到 AgentRunner；旧聊天路径保持相同事件与轮次上限。
+        await runAgentLoop({
+          model: chatModel,
+          messages: llmMessages,
+          tools: openaiTools,
+          temperature: mode === 'reasoning' ? 0.6 : 0.3,
+          maxIterations: 6,
+          signal: abortStream.signal,
+          onDelta: part => { answer += part; emit({ type: 'delta', text: part }); },
+          executeTool: async call => {
+            const row = toolByFnName.get(call.name);
+            if (!row) return null;
+            emit({ type: 'tool', name: row.name, args: call.arguments });
+            const result = await runCustomTool(row, call.arguments);
             emit({ type: 'tool_result', name: row.name, result: result.slice(0, 600) });
-            msgs.push({ role: 'tool', tool_call_id: c.id, content: result });
             think += `已调用工具「${row.name}」并获取结果。`;
-          }
-        }
+            return result;
+          },
+        });
       } catch (e){
         if (!aborted){
           const msg = e.name === 'AbortError' ? null : '模型调用失败：' + e.message;

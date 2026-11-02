@@ -39,16 +39,26 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
 
-## P0-0：测试、控制面与护栏
+## P0-0 / P0-1：测试、控制面与 Runtime 解耦
 
-本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成 **P0-0 基线与护栏**：
+本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成：
+
+**P0-0 基线与护栏**
 
 - Node 内置 `node:test` 单元/集成测试与 GitHub Actions CI
 - PostgreSQL 16 控制面 + 可重复 SQL 迁移（任务/事件/审批/检查点等核心表）
-- `AGENT_PLATFORM_ENABLED` 特性开关（默认关闭，P0-0 不接线）
+- `AGENT_PLATFORM_ENABLED` 特性开关（默认关闭）
 - 生产环境禁用演示数据
 - C1–C8 基线复现脚本与安全/数据/保留文档
 - 30 条评测任务 + 3 个端到端场景
+
+**P0-1 Runtime 解耦**
+
+- `server/agent/actions.js`：AgentAction 严格解析（plan/call_tool/ask_user/finish/fail）
+- `server/agent/context-builder.js`：上下文组装与不可信证据边界；旧聊天提示词逐字兼容
+- `server/agent/model-adapter.js`：模型流式/非流式入口与错误分类
+- `server/agent/runner.js`：受控“模型 → 工具”循环；旧聊天路径复用同一 Runner
+- 修复 G2：会话创建/加载/回显均校验 `agent_id` 归属；跨用户返回 403
 
 ```bash
 npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
@@ -56,10 +66,10 @@ npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
 export DATABASE_URL='postgres://ekh:ekh_dev_password@127.0.0.1:55432/ekh'
 npm run db:migrate       # 再执行一次应为幂等
 npm run test:pg          # 需 DATABASE_URL 指向 *_test 数据库
-npm run repro:baseline   # 生成 docs/baseline/c1-c8.{json,md}
+npm run repro:baseline   # 生成当前行为快照（会覆盖 docs/baseline）
 ```
 
-详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`。
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md` 与 `docs/adr/0002-p0-1-runtime-decoupling.md`。
 
 
 ## 配置模型

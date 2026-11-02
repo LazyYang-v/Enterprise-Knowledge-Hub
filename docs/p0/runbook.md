@@ -72,6 +72,8 @@ npm run repro:baseline
 
 脚本只在临时目录创建两个用户、知识库、Agent 和工具；不会读写仓库 `data/`，也不会访问生产数据库。结果状态：`reproduced` / `safe` / `static_evidence` / `not_reproduced`。
 
+> 已提交的 `docs/baseline/c1-c8.{json,md}` 是 **P0-0 冻结快照**。脚本记录的是“当前代码行为”，直接重跑会覆盖快照。P0-1 修复 G2 后，C2 会变为 `not_reproduced`（预期结果，不是回归）；如需保留历史，请先复制旧文件或人工确认后再提交。
+
 ## 7. 环境变量
 
 | 变量 | 默认 | 说明 |
