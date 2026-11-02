@@ -1,6 +1,6 @@
 // ModelAdapter：统一模型协议、流式输出、工具调用解析与错误映射（设计文档 §5.6）。
 // P0-1 复用现有 OpenAI 兼容客户端 llm.js，仅增加错误分类与稳定入口。
-import { streamChat, chatOnce, getModel, normalizeBaseUrl } from '../llm.js';
+import { streamChat, chatOnce } from '../llm.js';
 
 export class ModelError extends Error {
   constructor(code, message, cause){
@@ -43,4 +43,3 @@ export async function completeModel(model, messages, options = {}){
   }
 }
 
-export { getModel, normalizeBaseUrl };

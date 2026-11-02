@@ -1,6 +1,7 @@
 // 混合检索：FTS5 关键词 + 向量余弦，加权融合
 import { db } from './db.js';
-import { embed, getModel, cosine } from './llm.js';
+import { embed, cosine } from './llm.js';
+import { getModel } from './model-registry.js';
 
 export async function retrieve({ kbIds = [], sessionId = null, query, topK = 6 }){
   const text = String(query || '').trim();

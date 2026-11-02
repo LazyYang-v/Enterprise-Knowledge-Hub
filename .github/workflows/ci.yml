@@ -19,7 +19,7 @@ jobs:
       - run: npm test
 
   postgres-tests:
-    name: PostgreSQL migrations & control-plane schema
+    name: PostgreSQL control-plane, task runtime & recovery
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -49,7 +49,7 @@ jobs:
         run: npm run db:migrate
       - name: Migrate (idempotent rerun)
         run: npm run db:migrate
-      - name: Migration tests
+      - name: Control-plane, task runtime & recovery tests
         run: npm run test:pg
 
   baseline:

@@ -11,6 +11,7 @@ import agentRoutes from './routes/agents.js';
 import orgRoutes from './routes/orgs.js';
 import miscRoutes from './routes/misc.js';
 import retrieveRoutes from './routes/retrieve.js';
+import taskRoutes, { approvalsRouter } from './routes/tasks.js';
 import { mcpHandler } from './mcp.js';
 
 export function createApp(){
@@ -27,6 +28,9 @@ export function createApp(){
   app.use('/api', agentRoutes);
   app.use('/api', orgRoutes);
   app.use('/api', miscRoutes);
+  // Agent 平台任务 API：默认关闭，通过 AGENT_PLATFORM_ENABLED=1 启用。
+  app.use('/api/tasks', taskRoutes);
+  app.use('/api/approvals', approvalsRouter);
 
   // MCP Streamable HTTP 端点（服务令牌鉴权），供 DeepSeek Harness mcp-client 接入。
   app.post('/mcp', mcpHandler);

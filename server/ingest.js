@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import { db, getSetting } from './db.js';
 import { $uuid, now } from './util.js';
 import { extractText, chunkText } from './parse.js';
-import { embed, getModel } from './llm.js';
+import { embed } from './llm.js';
+import { getModel } from './model-registry.js';
 
 const queue = [];
 let running = false;

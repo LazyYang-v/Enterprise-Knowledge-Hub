@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export async function startApp(){
+export async function startApp(env = {}){
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ekh-test-'));
   process.env.EKH_DATA_DIR = dir;
   process.env.EKH_ENABLE_DEMO_SEED = '0';
+  for (const [key, value] of Object.entries(env)) process.env[key] = String(value);
   // 固定服务令牌，避免测试在临时目录生成/读取 data/service-token。
   if (!process.env.EKH_SERVICE_TOKEN) process.env.EKH_SERVICE_TOKEN = 'a'.repeat(64);
 

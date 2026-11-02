@@ -1,5 +1,5 @@
-// OpenAI 兼容协议客户端：对话补全（流式）与向量嵌入
-import { defaultModel } from './db.js';
+// OpenAI 兼容协议客户端：对话补全（流式）与向量嵌入。
+// 不依赖 SQLite；模型选择由 model-registry.js 负责。
 
 function headers(m){
   const h = { 'Content-Type': 'application/json' };
@@ -99,8 +99,6 @@ export async function embed(model, texts){
   return out;
 }
 
-// 取指定类型的默认模型；没有配置时返回 null
-export function getModel(kind){ return defaultModel(kind); }
 
 export function cosine(a, b){
   let dot = 0, na = 0, nb = 0;

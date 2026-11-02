@@ -34,7 +34,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // dry-run 不创建 tracking 表，也不写业务表。
   const dry = await migrate({ connectionString, dryRun: true, log: () => {} });
-  assert.deepEqual(dry.pending, ['0001_control_plane']);
+  assert.deepEqual(dry.pending, ['0001_control_plane', '0002_p0_2_task_runtime']);
   assert.deepEqual(dry.applied, []);
   await withClient(async c => {
     const r = await c.query("SELECT to_regclass('public.schema_migrations') AS t");
@@ -43,16 +43,16 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
 
   // 首次执行。
   const first = await migrate({ connectionString, log: () => {} });
-  assert.deepEqual(first.applied, ['0001_control_plane']);
+  assert.deepEqual(first.applied, ['0001_control_plane', '0002_p0_2_task_runtime']);
   assert.deepEqual(first.skipped, []);
 
   // 第二次执行幂等。
   const second = await migrate({ connectionString, log: () => {} });
   assert.deepEqual(second.applied, []);
-  assert.deepEqual(second.skipped, ['0001_control_plane']);
+  assert.deepEqual(second.skipped, ['0001_control_plane', '0002_p0_2_task_runtime']);
 
   const s = await status({ connectionString });
-  assert.deepEqual(s.applied, ['0001_control_plane']);
+  assert.deepEqual(s.applied, ['0001_control_plane', '0002_p0_2_task_runtime']);
   assert.deepEqual(s.pending, []);
 
   await withClient(async c => {
@@ -66,7 +66,7 @@ test('控制面迁移可重复执行且结构完整', { skip }, async () => {
     for (const idx of [
       'idx_agent_tasks_queue', 'idx_agent_tasks_lease', 'idx_agent_events_task_seq',
       'uq_agent_approvals_pending', 'uq_agent_presets_active_name',
-      'uq_agent_tool_calls_idem', 'uq_agent_inputs_pending',
+      'uq_agent_tool_calls_idem', 'uq_agent_inputs_pending', 'idx_agent_tasks_retry_due',
     ]) assert.ok(indexNames.has(idx), `缺少索引 ${idx}`);
 
     const triggers = await c.query("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal");

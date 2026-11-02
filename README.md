@@ -39,7 +39,7 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
 
-## P0-0 / P0-1：测试、控制面与 Runtime 解耦
+## P0-0 / P0-1 / P0-2：测试、Runtime 解耦与任务持久化
 
 本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成：
 
@@ -60,16 +60,28 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 - `server/agent/runner.js`：受控“模型 → 工具”循环；旧聊天路径复用同一 Runner
 - 修复 G2：会话创建/加载/回显均校验 `agent_id` 归属；跨用户返回 403
 
+**P0-2 任务持久化与 Worker**
+
+- `/api/tasks`：创建、列表、快照、取消、恢复、补充指令、输入；`/api/approvals` 骨架
+- PostgreSQL 任务状态机、事件序号连续、租约/心跳/fencing、SKIP LOCKED 领取
+- Worker：`npm run worker`；崩溃恢复、重试退避、优雅停机、取消确认
+- SSE：`Last-Event-ID` 续传、缺口检测、终端 `end` 事件
+- 20 次 `kill -9` 恢复测试（`test/pg/task-kill-recovery.test.js`）
+- 特性开关 `AGENT_PLATFORM_ENABLED` 默认关闭，关闭时不连接 PostgreSQL
+
 ```bash
 npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
 npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
 export DATABASE_URL='postgres://ekh:ekh_dev_password@127.0.0.1:55432/ekh'
 npm run db:migrate       # 再执行一次应为幂等
-npm run test:pg          # 需 DATABASE_URL 指向 *_test 数据库
+npm run test:pg          # 需 DATABASE_URL 指向 *_test 数据库（含 kill 恢复测试）
+npm run worker           # 另开终端：领取 Agent 任务（需 AGENT_PLATFORM_ENABLED=1）
 npm run repro:baseline   # 生成当前行为快照（会覆盖 docs/baseline）
 ```
 
-详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md` 与 `docs/adr/0002-p0-1-runtime-decoupling.md`。
+P0-2 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`）；工具调用在 P0-4 接入前会返回 `tool_unavailable`。
+
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`。
 
 
 ## 配置模型
