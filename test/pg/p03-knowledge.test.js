@@ -166,15 +166,14 @@ test('P0-3 任务范围、证据快照、引用与 Skill', { skip }, async t => 
     const kr = list.find(s => s.name === 'knowledge-research');
     const sa = list.find(s => s.name === 'spreadsheet-audit');
     assert.equal(kr.selectable, true);
-    assert.equal(sa.selectable, false);
-    assert.match(sa.unavailable_reason, /missing_tools/);
+    assert.equal(sa.selectable, true);
+    assert.equal(sa.unavailable_reason, null);
+    assert.equal(sa.version, '1.1.0');
 
     const selected = await registry.select({ tenantId, skillRef: 'knowledge-research' });
     assert.equal(selected.name, 'knowledge-research');
-    await assert.rejects(
-      () => registry.select({ tenantId, skillRef: 'spreadsheet-audit' }),
-      e => e.status === 422 && /不可用/.test(e.message),
-    );
+    const spreadsheet = await registry.select({ tenantId, skillRef: 'spreadsheet-audit' });
+    assert.equal(spreadsheet.version, '1.1.0');
 
     const loaded = await registry.loadInstructions({
       skillId: selected.skill_id, version: selected.version, contentHash: selected.content_hash,
@@ -265,9 +264,16 @@ test('P0-3 任务范围、证据快照、引用与 Skill', { skip }, async t => 
     const types = (await getEvents(tenantId, task.id)).map(e => e.type);
     assert.ok(types.includes('skill.selected'));
 
-    await assert.rejects(() => withSkill.createTask({
-      tenantId, ownerId: 'user-a', goal: '高风险技能',
+    const withSpreadsheet = await withSkill.createTask({
+      tenantId, ownerId: 'user-a', goal: '表格审计技能',
       input: { kb_scope: { mode: 'none' }, skill: 'spreadsheet-audit' },
+    });
+    assert.equal(withSpreadsheet.input_json.skill.name, 'spreadsheet-audit');
+    assert.equal(withSpreadsheet.input_json.skill.version, '1.1.0');
+
+    await assert.rejects(() => withSkill.createTask({
+      tenantId, ownerId: 'user-a', goal: '不存在的技能',
+      input: { kb_scope: { mode: 'none' }, skill: 'no-such-skill' },
     }), e => e.status === 422);
   });
 });

@@ -1,0 +1,105 @@
+{
+  "phase": "P0-5",
+  "purpose": "确定性验证成果面 ACL、内容寻址版本、文件工具往返、ZIP 防御与 finish 引用归属；不做模型级评分（P0-6）。",
+  "cases": [
+    {
+      "id": "ART-01",
+      "kind": "normal",
+      "title": "document.write 写入 Markdown 并读取",
+      "tool": "document.write",
+      "expect": {
+        "artifact_kind": "output",
+        "version": 1,
+        "read_text_contains": "交付说明",
+        "next_offset": null
+      }
+    },
+    {
+      "id": "ART-02",
+      "kind": "normal",
+      "title": "spreadsheet.write 生成 XLSX 并可读回",
+      "tool": "spreadsheet.write",
+      "expect": {
+        "artifact_name": "行动项.xlsx",
+        "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "sheets": ["行动项"],
+        "rows_readable": true
+      }
+    },
+    {
+      "id": "ART-03",
+      "kind": "normal",
+      "title": "archive.create 打包当前任务成果并读回条目文本",
+      "tool": "archive.create",
+      "expect": {
+        "entries": ["交付说明.md", "行动项.xlsx"],
+        "include_text": true,
+        "nested_archives_expanded": false
+      }
+    },
+    {
+      "id": "ART-04",
+      "kind": "boundary",
+      "title": "同名同内容重试复用同一 artifact，不新增版本",
+      "scenario": "先执行写工具，Worker 崩溃后重领并重写同一内容",
+      "expect": {
+        "artifact_rows": 1,
+        "version": 1,
+        "task_completed": true,
+        "reconciliation_approvals": 0
+      }
+    },
+    {
+      "id": "ART-05",
+      "kind": "boundary",
+      "title": "同名不同内容升版本且共享/新增 blob 引用正确",
+      "expect": {
+        "version": 2,
+        "old_version_readable": false,
+        "storage_key_exposed": false
+      }
+    },
+    {
+      "id": "ART-06",
+      "kind": "failure",
+      "title": "非法成果名与路径拒绝",
+      "inputs": ["../evil.txt", "..evil.txt", ".hidden.txt", "con.txt", "a/b.txt"],
+      "expect": {
+        "error": "artifact_path_invalid",
+        "file_written_outside_root": false
+      }
+    },
+    {
+      "id": "ART-07",
+      "kind": "failure",
+      "title": "ZIP 路径遍历、符号链接、加密与压缩炸弹拒绝",
+      "expect": {
+        "errors": ["archive_unsafe_entry", "archive_too_large"],
+        "extracted_to_disk": false
+      }
+    },
+    {
+      "id": "ART-08",
+      "kind": "failure",
+      "title": "成果 ACL 与 finish 引用归属",
+      "expect": {
+        "cross_user_download_status": 404,
+        "cross_tenant_list_status": 404,
+        "admin_same_tenant_download_status": 200,
+        "finish_foreign_ref_error": "model_invalid_output",
+        "task_completed": false
+      }
+    },
+    {
+      "id": "ART-09",
+      "kind": "failure",
+      "title": "上传类型与大小限制",
+      "expect": {
+        "unsupported_extension": "artifact_unsupported_type",
+        "mime_mismatch": "artifact_type_mismatch",
+        "oversized_status": 413,
+        "terminal_task_upload_status": 409
+      }
+    }
+  ]
+}

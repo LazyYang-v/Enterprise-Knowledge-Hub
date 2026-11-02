@@ -43,3 +43,19 @@ test('3 个端到端场景结构完整且引用存在的任务', () => {
     for (const id of e2e.acceptance_ids || []) assert.ok(validIds.has(id), `${file} 未知验收 ID ${id}`);
   }
 });
+
+test('P0-5 成果评测结构完整且不含二进制 fixture', () => {
+  const file = path.join(ROOT, 'evals/p0/p05-artifacts.json');
+  const spec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(spec.phase, 'P0-5');
+  assert.ok(Array.isArray(spec.cases));
+  assert.equal(spec.cases.length, 9);
+  assert.deepEqual(spec.cases.map(c => c.id), Array.from({ length: 9 }, (_, i) => `ART-0${i + 1}`));
+  for (const c of spec.cases){
+    assert.ok(c.title);
+    assert.ok(['normal', 'boundary', 'failure'].includes(c.kind), `${c.id} kind 不合法`);
+    assert.ok(c.expect && typeof c.expect === 'object', `${c.id} 缺少 expect`);
+  }
+  const fixtures = fs.readdirSync(path.join(ROOT, 'evals/p0/fixtures'));
+  assert.deepEqual(fixtures, ['README.md'], 'fixture 必须运行时生成，不提交二进制');
+});

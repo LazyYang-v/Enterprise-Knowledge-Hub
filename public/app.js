@@ -142,6 +142,7 @@ const state = {
   taskEvents: [],
   taskMessages: [],
   taskEvidence: [],
+  taskArtifacts: [],
   taskStream: null,
   registryTools: [],
   mcpConnections: [],
@@ -1801,6 +1802,9 @@ const TASK_EVENT_LABELS = {
   'approval.decided': '审批结果',
   'evidence.retrieved': '检索证据',
   'evidence.version_changed': '证据版本变化',
+  'artifact.created': '生成成果',
+  'artifact.attached': '附加文件',
+  'artifact.deleted': '删除成果',
   'message.created': '消息',
   'instruction.received': '收到指令',
   'input.received': '收到输入',
@@ -1967,6 +1971,9 @@ async function openCreateTask(){
           <span class="badge ${t.side_effect === 'read' ? '' : 'warn'}">${esc(t.side_effect || 'read')}</span>
         </label>`).join('') : '<span class="form-hint">工具注册表不可用，将使用默认知识工具。</span>'}
       </div>
+      <label class="form-label">附件（可选）</label>
+      <input class="form-input" type="file" id="ct-files" multiple>
+      <p class="form-hint">创建后自动上传到任务成果面；单文件不超过 25 MB。</p>
     </div>
     <div class="dlg-foot">
       <button class="btn dlg-close">取消</button>
@@ -1992,10 +1999,21 @@ async function openCreateTask(){
     };
     const selected = $$('#ct-tools input:checked', dlg).map(i => i.value);
     if (selected.length) body.tools = selected;
+    const files = [...($('#ct-files', dlg).files || [])];
     try {
       const r = await API.post('/tasks', body);
+      let failed = 0;
+      for (const file of files){
+        const fd = new FormData();
+        fd.append('file', file);
+        try { await API.upload(`/tasks/${r.task.id}/attachments`, fd); }
+        catch { failed += 1; }
+      }
       closeDialog();
-      toast('任务已创建');
+      toast(failed
+        ? `任务已创建，${failed} 个附件上传失败`
+        : files.length ? `任务已创建，已上传 ${files.length} 个附件` : '任务已创建',
+      failed === 0);
       await loadTasks();
       openTask(r.task.id);
     } catch (e){ toast(e.message, false); }
@@ -2007,12 +2025,13 @@ async function openTask(id){
   state.taskEvents = [];
   state.taskMessages = [];
   state.taskEvidence = [];
+  state.taskArtifacts = [];
   showView('task-detail');
   $('#task-detail-title').textContent = '加载中…';
   $('#task-detail-status').innerHTML = '';
   $('#task-detail-meta').textContent = '';
   $('#task-detail-actions').innerHTML = '';
-  ['task-approval-card', 'task-messages-card', 'task-events-card', 'task-plan-card', 'task-tools-card', 'task-evidence-card', 'task-usage-card']
+  ['task-approval-card', 'task-messages-card', 'task-events-card', 'task-plan-card', 'task-artifacts-card', 'task-tools-card', 'task-evidence-card', 'task-usage-card']
     .forEach(el => { $('#' + el).innerHTML = '<div class="task-loading">加载中…</div>'; });
   await refreshTaskDetail(true);
   if (state.currentTask?.id === id) connectTaskStream(id);
@@ -2026,7 +2045,9 @@ async function refreshTaskDetail(full = false){
     if (state.currentTask?.id !== id) return;
     state.currentTask = d.task;
     if (full){
-      await Promise.all([loadTaskMessages(id), loadTaskEvents(id), loadTaskEvidence(id)]);
+      await Promise.all([loadTaskMessages(id), loadTaskEvents(id), loadTaskEvidence(id), loadTaskArtifacts(id)]);
+    } else {
+      state.taskArtifacts = d.task.artifacts || [];
     }
     renderTaskDetail();
   } catch (e){
@@ -2070,6 +2091,14 @@ async function loadTaskEvidence(id){
     if (state.currentTask?.id === id) state.taskEvidence = [];
   }
 }
+async function loadTaskArtifacts(id){
+  try {
+    const d = await API.get(`/tasks/${id}/artifacts`);
+    if (state.currentTask?.id === id) state.taskArtifacts = d.artifacts || [];
+  } catch {
+    if (state.currentTask?.id === id) state.taskArtifacts = [];
+  }
+}
 
 function renderTaskDetail(){
   const task = state.currentTask;
@@ -2098,6 +2127,7 @@ function renderTaskDetail(){
   renderTaskMessages(task);
   renderTaskEvents();
   renderTaskPlan(task);
+  renderTaskArtifacts(task);
   renderTaskTools(task);
   renderTaskEvidence(task);
   renderTaskUsage(task);
@@ -2277,6 +2307,75 @@ function renderTaskPlan(task){
       <div><div class="task-plan-title">${esc(p.title)}</div>${p.description ? `<div class="task-plan-desc">${esc(p.description)}</div>` : ''}</div>
       <span class="badge">${esc(p.status || '')}</span>
     </div>`).join('')}</div>`;
+}
+function fmtBytes(n){
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB';
+  return (v / 1024 / 1024).toFixed(1) + ' MB';
+}
+function renderTaskArtifacts(task){
+  const card = $('#task-artifacts-card');
+  if (!card) return;
+  const list = state.taskArtifacts || [];
+  const canDownload = task.permissions?.can_download !== false;
+  const canWrite = !!task.permissions?.can_upload_attachment;
+  const canDelete = canDownload;
+  const rows = list.map(a => `<div class="task-artifact-item">
+      <div class="task-artifact-main">
+        <div class="task-artifact-name" title="${esc(a.name)}">${esc(a.name)}</div>
+        <div class="task-artifact-meta">
+          <span class="badge">${esc(a.kind || 'output')}</span>
+          <span>v${esc(String(a.version || 1))}</span>
+          <span>${esc(fmtBytes(a.size_bytes))}</span>
+          <span>${esc(fmtTime(a.created_at))}</span>
+        </div>
+      </div>
+      ${canDownload ? `<button class="btn small" data-artifact-download="${esc(a.id)}" data-artifact-name="${esc(a.name)}">下载</button>` : ''}
+      ${canDelete ? `<button class="btn small danger" data-artifact-delete="${esc(a.id)}" data-artifact-name="${esc(a.name)}">删除</button>` : ''}
+    </div>`).join('');
+  card.innerHTML = `<div class="task-card-head"><span class="task-card-title">成果</span><span class="badge">${list.length}</span></div>
+    ${list.length ? `<div class="task-artifact-list">${rows}</div>` : '<p class="task-muted">还没有成果文件。Agent 可通过文件工具写入，或由你上传附件。</p>'}
+    ${canWrite ? `<div class="task-artifact-actions"><button class="btn small" id="task-artifact-upload-btn">上传附件</button><input type="file" id="task-artifact-file" multiple hidden></div>` : ''}`;
+
+  $$('[data-artifact-download]', card).forEach(btn => btn.addEventListener('click', () => {
+    const aid = btn.getAttribute('data-artifact-download');
+    downloadFile(`/tasks/${task.id}/artifacts/${aid}/download`, null, btn.getAttribute('data-artifact-name') || 'download');
+  }));
+  $$('[data-artifact-delete]', card).forEach(btn => btn.addEventListener('click', async () => {
+    const aid = btn.getAttribute('data-artifact-delete');
+    if (!confirm(`删除成果「${btn.getAttribute('data-artifact-name') || aid}」？删除后不可下载。`)) return;
+    try {
+      await API.del(`/tasks/${task.id}/artifacts/${aid}`);
+      toast('成果已删除');
+      await refreshTaskDetail(false);
+      loadTaskEvents(task.id).then(renderTaskEvents);
+    } catch (e){ toast(e.message, false); }
+  }));
+
+  const input = $('#task-artifact-file', card);
+  $('#task-artifact-upload-btn', card)?.addEventListener('click', () => input?.click());
+  input?.addEventListener('change', async () => {
+    const files = [...(input.files || [])];
+    if (!files.length) return;
+    let ok = 0;
+    let failed = 0;
+    for (const file of files){
+      const fd = new FormData();
+      fd.append('file', file);
+      try {
+        await API.upload(`/tasks/${task.id}/attachments`, fd);
+        ok += 1;
+      } catch (e){
+        failed += 1;
+        toast(`${file.name}：${e.message}`, false);
+      }
+    }
+    input.value = '';
+    if (ok) toast(`已上传 ${ok} 个附件${failed ? `，${failed} 个失败` : ''}`);
+    await refreshTaskDetail(false);
+    loadTaskEvents(task.id).then(renderTaskEvents);
+  });
 }
 function renderTaskTools(task){
   const card = $('#task-tools-card');

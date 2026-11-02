@@ -2,6 +2,7 @@
 // Worker 写入必须带 lease_owner + version（fencing）。
 import crypto from 'node:crypto';
 import { getPool, withTransaction } from './pg.js';
+import { assertTaskArtifacts, ArtifactClaimError } from './artifact-repo.js';
 
 export class TaskConflictError extends Error {
   constructor(message = '任务版本冲突'){
@@ -373,6 +374,15 @@ export async function completeTask({
       [tenantId, taskId, stepId],
     );
     if (!step.rowCount) throw new LeaseLostError('租约已失效：步骤已完成或不属于当前领取');
+
+    const artifacts = [...new Set((artifactIds || []).map(String))];
+    if (artifacts.length){
+      try {
+        await assertTaskArtifacts({ tenantId, taskId, ids: artifacts, client });
+      } catch {
+        throw new ArtifactClaimError();
+      }
+    }
 
     if (checkpointState){
       const stateJson = JSON.stringify(checkpointState);

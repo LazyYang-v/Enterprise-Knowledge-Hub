@@ -258,7 +258,83 @@ curl -s -X POST http://localhost:3210/api/approvals/<approval_id>/decision \
 - `POST /api/model-profiles`：PlatformAdmin；`credential_ref` 支持 `env:NAME` / `file:<相对路径>`；`base_url` 拒绝私网与元数据地址。
 - `POST /api/service-principals`：返回明文 token **仅一次**；`scopes` 形如 `{"kb_ids":["kb-a"],"tools":["search_knowledge"]}`；`DELETE` 吊销，`/rotate` 轮换。
 
-## 11. CI
+## 11. 成果面与文件工具（P0-5）
+
+### 目录与权限
+
+成果存储在 `$EKH_DATA_DIR/artifacts/`：
+
+```text
+artifacts/
+├── blobs/<aa>/<bb>/<sha256>   # 内容寻址，去重；0700 目录 / 0600 文件
+├── tmp/                       # 写入临时文件（fsync 后 rename）
+└── quarantine/                # 无数据库记录的孤儿文件
+```
+
+Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`；不要把 `data/artifacts` 挂成静态目录，下载只能走 API。
+
+### 任务中使用文件工具
+
+默认任务仍快照 4 个只读知识工具。需要写文件时，在创建任务的 `tools` 中显式加入：
+
+```json
+{"goal": "汇总附件并生成交付包", "tools": ["document.read", "spreadsheet.read", "archive.create", "archive.read"]}
+```
+
+可用工具：`artifact.create`、`document.read/write`、`spreadsheet.read/write`、`archive.read/create`。写工具为 `write_workspace`（medium，默认不审批）；任务 `approval_mode=always` 时仍会暂停审批。模型每轮会收到当前任务成果目录（ID/名称/版本/大小，不含内容）；`finish.artifact_refs` 只能引用本任务成果。
+
+### HTTP API
+
+```bash
+# 上传附件（仅 owner 或同租户 admin；终态任务 409）
+curl -s -X POST "http://localhost:3210/api/tasks/<task_id>/attachments" \
+  -H "Authorization: Bearer $TOKEN" -F "file=@./输入说明.md"
+
+# 列表（不含 storage_key/磁盘路径）
+curl -s "http://localhost:3210/api/tasks/<task_id>/artifacts" -H "Authorization: Bearer $TOKEN"
+
+# 下载：每次重新校验任务 ACL；失败统一 404
+curl -s -OJ "http://localhost:3210/api/tasks/<task_id>/artifacts/<artifact_id>/download" \
+  -H "Authorization: Bearer $TOKEN"
+
+# 软删除：立即停止下载；blob 由 GC 在宽限期后清理
+curl -s -X DELETE "http://localhost:3210/api/tasks/<task_id>/artifacts/<artifact_id>" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+前端路径：任务详情右侧「成果」卡可列表、下载、上传附件、删除；新建任务对话框可选择附件并在创建后自动上传（Worker 可能已开始执行，建议创建后尽快上传）。
+
+### 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `EKH_ARTIFACT_MAX_BYTES` | `26214400` | 单个成果上限（25 MiB） |
+| `EKH_ARTIFACT_MAX_TASK_BYTES` | `104857600` | 单任务成果总量（100 MiB） |
+| `EKH_ARTIFACT_MAX_PER_TASK` | `100` | 单任务成果数量 |
+| `EKH_ARTIFACT_UPLOAD_MAX_BYTES` | `26214400` | 单次上传上限（25 MiB） |
+| `EKH_ARTIFACT_GC_GRACE_MS` | `86400000` | 软删除后 GC 宽限期 |
+| `EKH_FILE_MAX_READ_CHARS` | `6000` | `document.read` 单次返回字符数 |
+| `EKH_FILE_EXTRACT_MAX_CHARS` | `200000` | 文本抽取总字符上限 |
+| `EKH_ZIP_MAX_ENTRIES` | `200` | ZIP 条目数上限 |
+| `EKH_ZIP_MAX_ENTRY_BYTES` | `10485760` | 单条解压上限 |
+| `EKH_ZIP_MAX_TOTAL_BYTES` | `41943040` | 总解压上限 |
+| `EKH_ZIP_MAX_RATIO` | `100` | 压缩比上限 |
+| `EKH_SHEET_MAX_ROWS` / `EKH_SHEET_MAX_COLS` | `5000` / `100` | 表格读取上限 |
+
+### GC 与备份
+
+```bash
+npm run artifacts:gc -- --dry-run          # 只统计
+npm run artifacts:gc                       # 按宽限期清理无引用 blob
+npm run artifacts:gc -- --grace-ms=0       # 立即清理（仅测试/维护）
+```
+
+- GC 以数据库引用为准：先锁 blob，清理超过宽限期的软删除行；仍有引用则跳过；删除行后再删文件。
+- 孤儿文件（无数据库记录）进入 `quarantine/`，不会自动删除，便于人工核对。
+- 备份：除 PostgreSQL 外，必须同时备份 `data/artifacts`；恢复时保持目录与数据库一致。
+- 删除是软删除；下载/列表立即不可见。法律保留优先于 GC。
+
+## 12. CI
 
 `.github/workflows/ci.yml`：
 
@@ -267,7 +343,7 @@ curl -s -X POST http://localhost:3210/api/approvals/<approval_id>/decision \
 
 基线脚本不作为门禁。
 
-## 12. 常见问题
+## 13. 常见问题
 
 | 问题 | 处理 |
 |---|---|
@@ -279,5 +355,8 @@ curl -s -X POST http://localhost:3210/api/approvals/<approval_id>/decision \
 | 端口 55432 被占用 | 修改 `docker-compose.yml` 端口映射，并同步 `DATABASE_URL` |
 | 迁移校验和不一致 | 已执行迁移被改写；恢复原文件或人工核对后处理，不要直接删记录 |
 | `test:pg` 全部 skipped | `DATABASE_URL` 缺失或数据库名不以 `_test` 结尾（安全护栏） |
+| 成果下载 404 | 任务不属于当前用户/租户、artifact 已软删除，或 blob 文件缺失；查 `audit_log` 的 `artifact.download` |
+| Worker 写入成果报 `artifact_storage_invalid` | Web 与 Worker 的 `EKH_DATA_DIR` 不一致，或 `data/artifacts` 被清理；两者必须共享同一目录 |
+| 上传返回 400 `artifact_type_mismatch` | 扩展名与 magic bytes 不符；上传前不要改扩展名 |
 | 测试残留临时目录 | 正常会自动清理；异常退出可清理 `/tmp/ekh-*` |
 | 生产启动没有演示账号 | 预期行为（G7） |

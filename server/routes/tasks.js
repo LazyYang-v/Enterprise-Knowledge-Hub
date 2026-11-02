@@ -1,8 +1,10 @@
 // 任务 API（设计文档 §13.2–§13.6）。仅当 AGENT_PLATFORM_ENABLED=1 时启用；只接受 Bearer 头。
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import multer from 'multer';
 import { authRequired } from '../auth.js';
 import { config } from '../config.js';
+import { fixFileName } from '../util.js';
 import { resolveTenantId } from '../control/tenants.js';
 import {
   TaskService, TaskValidationError, TaskForbiddenError, TaskStateError, TERMINAL_STATUSES,
@@ -17,6 +19,8 @@ import { selectTaskSkill } from '../skills/index.js';
 import { getPool, withTransaction } from '../control/pg.js';
 import { resolveTools } from '../tools/registry.js';
 import { isAdminUser } from '../auth/admin.js';
+import { getArtifactService } from '../artifacts/service.js';
+import { contentDisposition } from '../artifacts/paths.js';
 
 const router = Router();
 export const approvalsRouter = Router();
@@ -28,6 +32,12 @@ const service = new TaskService({
   resolveTools,
 });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 附件先进内存：上限 25 MiB，随后由成果服务做扩展名/magic bytes/名称校验。
+const attachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: config.artifacts.uploadMaxBytes, files: 1, fields: 8 },
+}).single('file');
 
 function requestId(req){
   return req.get('X-Request-Id') || crypto.randomUUID();
@@ -306,11 +316,85 @@ router.post('/:id/messages', async (req, res) => {
   } catch (e){ mapError(res, e, req); }
 });
 
+/** 成果面 ACL：不区分“无任务/无权限”，统一 404，避免泄露任务存在性。 */
+async function taskForArtifactRequest(req){
+  const tenantId = await resolveTenantId(req.user.id);
+  const isAdmin = isAdminUser(req.user);
+  try {
+    const task = await service.getTaskForUser({
+      tenantId, taskId: req.params.id, userId: req.user.id, isAdmin,
+    });
+    return { tenantId, task, isAdmin };
+  } catch (e){
+    if (e instanceof TaskForbiddenError) throw new TaskStateError('任务不存在', 'not_found');
+    throw e;
+  }
+}
+
 router.get('/:id/artifacts', async (req, res) => {
   try {
-    const tenantId = await resolveTenantId(req.user.id);
-    await service.getTaskForUser({ tenantId, taskId: req.params.id, userId: req.user.id });
-    res.json({ artifacts: [], request_id: requestId(req) });
+    const { tenantId, task } = await taskForArtifactRequest(req);
+    const artifacts = await getArtifactService().list({
+      tenantId, taskId: task.id,
+      kind: req.query.kind ? String(req.query.kind) : null,
+      limit: Number(req.query.limit) || 200,
+    });
+    res.json({ artifacts, request_id: requestId(req) });
+  } catch (e){ mapError(res, e, req); }
+});
+
+router.get('/:id/artifacts/:artifactId/download', async (req, res) => {
+  try {
+    const { tenantId, task } = await taskForArtifactRequest(req);
+    const file = await getArtifactService().download({
+      tenantId, taskId: task.id, artifactId: req.params.artifactId,
+      userId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || null,
+    });
+    res.writeHead(200, {
+      'Content-Type': file.mime,
+      'Content-Length': String(file.size),
+      'Content-Disposition': contentDisposition(file.filename),
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    });
+    file.stream.on('error', () => { try { res.destroy(); } catch {} });
+    file.stream.pipe(res);
+  } catch (e){ mapError(res, e, req); }
+});
+
+router.post('/:id/attachments', (req, res) => {
+  attachmentUpload(req, res, async err => {
+    if (err){
+      if (err.code === 'LIMIT_FILE_SIZE') return fail(res, 413, 'file_too_large', '附件超过大小上限', req);
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') return fail(res, 400, 'validation_error', '只允许上传一个 file 字段', req);
+      return fail(res, 400, 'validation_error', '附件上传失败', req);
+    }
+    try {
+      const { tenantId, task, isAdmin } = await taskForArtifactRequest(req);
+      if (TERMINAL_STATUSES.has(task.status)) return fail(res, 409, 'conflict', '任务已结束，不能上传附件', req);
+      if (!req.file) return fail(res, 400, 'validation_error', '未选择文件', req);
+      const artifact = await getArtifactService().attachUpload({
+        tenantId, taskId: task.id, userId: req.user.id,
+        buffer: req.file.buffer,
+        originalName: fixFileName(req.file.originalname || ''),
+        sourceRef: String(req.body?.source_ref || '').slice(0, 200),
+        ip: req.ip, userAgent: req.get('user-agent') || null,
+      });
+      const snapshot = await service.snapshot({ tenantId, taskId: task.id, userId: req.user.id, isAdmin });
+      res.status(201).json({ artifact, task: snapshot, request_id: requestId(req) });
+    } catch (e){ mapError(res, e, req); }
+  });
+});
+
+router.delete('/:id/artifacts/:artifactId', async (req, res) => {
+  try {
+    const { tenantId, task } = await taskForArtifactRequest(req);
+    await getArtifactService().softDelete({
+      tenantId, taskId: task.id, artifactId: req.params.artifactId,
+      userId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || null,
+    });
+    res.json({ ok: true, request_id: requestId(req) });
   } catch (e){ mapError(res, e, req); }
 });
 

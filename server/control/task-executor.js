@@ -33,6 +33,7 @@ import { DEFAULT_BUDGET, RETRYABLE_ERRORS } from './task-service.js';
 import { config } from '../config.js';
 import { getEvidenceByIds } from './evidence-repo.js';
 import { createToolExecutor } from '../tools/executor.js';
+import { getArtifactService } from '../artifacts/service.js';
 import { PolicyDeniedError } from '../tools/policy.js';
 import { ToolSchemaError } from '../tools/schema.js';
 import { hashArgs } from '../tools/contract.js';
@@ -128,12 +129,13 @@ async function finalizeCancel(task, workerId){
   }));
 }
 
-function buildMessages(goal, plan, history, { skill = '', evidence = [], toolCatalog = '' } = {}){
+function buildMessages(goal, plan, history, { skill = '', evidence = [], toolCatalog = '', artifactCatalog = '' } = {}){
   const planLines = plan.map(p => ({ title: p.title, status: p.status }));
   const system = [
     buildAgentSystemPrompt({ goal, plan: planLines, evidence }),
     ACTION_INSTRUCTION,
     toolCatalog ? `=== ALLOWED TOOLS ===\n${toolCatalog}` : '',
+    artifactCatalog ? `=== TASK ARTIFACTS (untrusted metadata) ===\n${artifactCatalog}` : '',
   ].filter(Boolean).join('\n\n');
   const messages = [{ role: 'system', content: skill ? `${system}\n\n=== SKILL ===\n${skill}` : system }, { role: 'user', content: goal }];
   for (const m of history){
@@ -162,6 +164,26 @@ function toolCatalogText(executor){
   return text.length > config.tools.catalogMaxChars
     ? text.slice(0, config.tools.catalogMaxChars) + '\n…(工具目录已截断)'
     : text;
+}
+
+function cleanLabel(value, max = 120){
+  return String(value || '').replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, ' ').slice(0, max);
+}
+
+/** 当前任务成果目录：只注入 ID/名称/类型/大小，绝不注入内容。 */
+async function artifactCatalogText(task){
+  try {
+    const list = await getArtifactService().listForPrompt({
+      tenantId: task.tenant_id, taskId: task.id, limit: 50,
+    });
+    if (!list.length) return '';
+    const text = list.map(a => (
+      `- ${a.id} [${a.kind} v${a.version}] ${cleanLabel(a.name)} (${cleanLabel(a.mime, 80)}, ${a.size_bytes}B)`
+    )).join('\n');
+    return text.length > 2000 ? text.slice(0, 2000) + '\n…(成果目录已截断)' : text;
+  } catch {
+    return '';
+  }
 }
 
 function locatorText(locator){
@@ -510,6 +532,7 @@ export async function executeTask(task, {
       const messages = buildMessages(current.goal, plan, history, {
         skill: skillInstructions, evidence: evidenceForPrompt,
         toolCatalog: toolCatalogText(executor),
+        artifactCatalog: await artifactCatalogText(current),
       });
       const timeoutSignal = AbortSignal.timeout(budget.model_timeout_ms);
       const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -634,18 +657,32 @@ export async function executeTask(task, {
             throw new TaskExecutionError('model_invalid_output', 'citations 引用了不属于当前领取的证据', { retryable: true });
           }
         }
+        const artifactIds = [...new Set(action.artifact_refs || [])];
+        if (artifactIds.length){
+          try {
+            await getArtifactService().assertFinishRefs({
+              tenantId: current.tenant_id, taskId: current.id, ids: artifactIds,
+            });
+          } catch (e){
+            await finishStep({ tenantId: current.tenant_id, taskId: current.id, stepId: step.id, workerId, leaseEpoch, status: 'failed', errorCode: 'model_invalid_output' });
+            throw new TaskExecutionError('model_invalid_output', `artifact_refs 非法或不属于当前任务：${e.message}`, { retryable: true });
+          }
+        }
         try {
           await completeTask({
             tenantId: current.tenant_id, taskId: current.id, workerId, leaseEpoch,
             stepId: step.id, stepSeq: Number(step.seq),
             summary: action.summary, citations: citationIds,
-            evidenceIds: [...evidenceIds], artifactIds: action.artifact_refs || [],
+            evidenceIds: [...evidenceIds], artifactIds,
             usage,
-            checkpointState: { finished: true, summary: action.summary, citations: citationIds, usage },
+            checkpointState: { finished: true, summary: action.summary, citations: citationIds, artifact_ids: artifactIds, usage },
           });
         } catch (e){
           if (e.code === 'evidence_conflict'){
             throw new TaskExecutionError('model_invalid_output', 'citations 引用了不属于当前领取的证据', { retryable: true });
+          }
+          if (e.code === 'artifact_conflict'){
+            throw new TaskExecutionError('model_invalid_output', 'artifact_refs 引用了不属于当前任务的成果', { retryable: true });
           }
           throw e;
         }
@@ -702,11 +739,14 @@ export async function executeTask(task, {
         const hash = hashArgs(action.arguments || {});
         const approvalNeeded = decision.decision === 'approval';
         const callStatus = approvalNeeded ? 'awaiting_approval' : 'proposed';
+        const idempotencyKey = descriptor.source === 'builtin' && descriptor.side_effect === 'write_workspace'
+          ? `${action.tool_name}:${hash}:${step.id}:${Number(usage.tool_calls || 0)}`
+          : null;
         const call = await createToolCall({
           tenantId: current.tenant_id, taskId: current.id, stepId: step.id,
           toolName: action.tool_name, toolVersion: descriptor.version, source: descriptor.source,
           args: action.arguments || {}, argsHash: hash, sideEffect: descriptor.side_effect,
-          status: callStatus, codeHash: descriptor.code_hash || '',
+          status: callStatus, codeHash: descriptor.code_hash || '', idempotencyKey,
         });
         await emit(current, 'tool.requested', {
           tool_call_id: call.id, tool_name: action.tool_name,

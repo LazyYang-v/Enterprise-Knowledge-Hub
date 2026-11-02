@@ -4,8 +4,10 @@
 
 - **P0-0**：定义 30 条任务与 3 个端到端场景，作为后续阶段的验收语料。
 - **P0-3**：新增 `p0/p03-citations.json`，用确定性用例验证引用字段、版本固定与越权收缩；对应测试见 `test/integration/knowledge-*.test.js`、`test/pg/p03-knowledge.test.js`。
-- **P0-5 / P0-6**：接入真实执行器，生成文件 fixture，运行评测并记录指标。
-- 当前没有自动评分器；`tasks.json` 只描述目标、输入与通过标准；`p03-citations.json` 是测试设计清单，不是数值指标。
+- **P0-4**：新增 `p0/p04-tools.json`，验证工具契约、默认拒绝、审批一次性与沙箱边界。
+- **P0-5**：新增 `p0/p05-artifacts.json`（ART-01…ART-09），覆盖成果写入/版本/ACL、ZIP 防御、上传限制与 finish 引用；fixture 全部在测试运行时生成，仓库不提交二进制。
+- **P0-6**：接入真实模型评测与故障注入，记录指标。
+- 当前没有自动评分器；`tasks.json` 只描述目标、输入与通过标准；`p03-citations.json` / `p04-tools.json` / `p05-artifacts.json` 是测试设计清单，不是数值指标。
 
 ## 任务格式
 

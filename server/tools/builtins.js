@@ -1,6 +1,7 @@
 // 内置知识工具：只通过 KnowledgeService（ACL 唯一入口）访问知识面。
 // handler 必须再校验任务快照范围，防止模型用文档 id 越过 kb_scope。
 import { getEvidence } from '../control/evidence-repo.js';
+import { FILE_TOOLS } from './file-tools.js';
 
 function toolError(code, message){
   const e = new Error(message);
@@ -28,7 +29,7 @@ function assertDocumentInScope(ctx, doc){
   }
 }
 
-export const BUILTIN_TOOLS = Object.freeze([
+const KNOWLEDGE_TOOLS = [
   {
     name: 'knowledge.search',
     version: '1.0.0',
@@ -173,7 +174,9 @@ export const BUILTIN_TOOLS = Object.freeze([
       return { bases: all.filter(kb => allowed.has(kb.id)) };
     },
   },
-]);
+];
+
+export const BUILTIN_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...FILE_TOOLS]);
 
 const BY_NAME = new Map(BUILTIN_TOOLS.map(t => [t.name, t]));
 

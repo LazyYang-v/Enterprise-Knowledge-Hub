@@ -1,7 +1,7 @@
-# 威胁模型（P0-4 草案）
+# 威胁模型（P0-5 草案）
 
 > 来源：`Enterprise-Knowledge-Hub-Agent-P0-Design.md` §14.11、§14.9、§3.6。
-> 本文件描述 P0 目标系统的信任边界与威胁。P0-1 修复 G2，P0-3 修复 G1/G9/G10，P0-4 修复 G3–G6/G8。S-09（成果文件 ACL）仍开放到 P0-5。
+> 本文件描述 P0 目标系统的信任边界与威胁。P0-1 修复 G2，P0-3 修复 G1/G9/G10，P0-4 修复 G3–G6/G8，P0-5 修复 S-09（成果文件 ACL）。
 
 ## 1. 信任边界
 
@@ -27,7 +27,7 @@
 | 检索 | 候选集全量读出、内存/延迟不可控 | SQL 预过滤、候选上限 | **C7 已修复（P0-3）**：范围/版本/删除条件下推 SQL，候选上限 + FTS 限量 + topK 上限。测试：`test/integration/retrieval-cap.test.js` |
 | 文档版本与引用 | 重解析后引用漂移、旧证据不可回读、删除后仍被检索 | 版本化分块、软删除、证据快照、版本固定 | **G9 已修复（P0-3）**：`document_versions` + `agent_evidence` 快照；引用按 `document_version/content_hash` 固定。测试：`test/integration/knowledge-versioning.test.js`、`test/pg/p03-knowledge.test.js` |
 | 用户检索 API | 用户令牌越权 | 可见 KB 过滤 | **C8 基线安全**：越权返回 403 |
-| 成果文件 | 路径遍历、未授权下载 | artifact id、canonical path、下载重新校验 ACL | P0-5 实现（S-09 仍开放） |
+| 成果文件 | 路径遍历、未授权下载、ZIP 逃逸/炸弹 | artifact id、canonical path、下载重新校验 ACL、ZIP 护栏 | **S-09 已修复（P0-5）**：文件名单段 basename + 控制字符/保留名拒绝；blob 路径只由 SHA-256 生成并做 realpath 根内校验；下载每次重新校验任务 ACL，失败统一 404，响应 `attachment`/`nosniff`/`private, no-store`；审计 `artifact.download`；ZIP 拒绝 `..`/绝对路径/符号链接/加密/重复名/超限/高压缩比。测试：`test/unit/artifact-paths.test.js`、`test/unit/zip-guard.test.js`、`test/pg/artifacts-api.test.js`、`test/pg/artifact-acl.test.js` |
 | 工具执行 | 模型越权调用、危险副作用无人确认、重放 | 任务快照、默认拒绝、一次性审批绑定参数、预算 | **G8 已修复（P0-4）**：PolicyEngine + `agent_approvals`（`args_hash`/`consumed_at`）+ 执行前持久化；审批过期不执行；工具尝试/调用完成按 `attempt+worker+lease_epoch` fencing。测试：`test/pg/tool-approval.test.js`、`test/pg/task-fencing.test.js`、`test/unit/tool-policy.test.js` |
 | 审计与事件 | 篡改、删除 | append-only、权限分离 | 控制面表已有 append-only 触发器；**P0-4 运行时审计已接入**（策略拒绝/审批/工具/管理操作，只写 ID 与哈希） |
 
@@ -57,7 +57,8 @@
 | P0-2 | 任务持久化、租约、检查点、事件 |
 | P0-3（已完成） | KnowledgeService ACL 交集（G1）、文档版本与证据快照（G9）、检索上限（G10） |
 | P0-4（已完成） | 工具 owner 校验（G3）、PlatformAdmin 与 `credential_ref`（G4）、MCP 服务主体（G5）、沙箱化（G6）、审批与审计（G8） |
-| P0-5/P0-6 | 成果 ACL、路径安全、端到端安全与故障注入 |
+| P0-5（已完成） | 成果 ACL（S-09）、内容寻址 blob、下载审计、ZIP 路径遍历/炸弹防御、finish 引用归属校验 |
+| P0-6 | 容器/网络命名空间沙箱、真实模型评测与故障注入、per-tenant 限流 |
 
 ## 5. 不做什么
 

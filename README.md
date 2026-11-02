@@ -39,7 +39,7 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 
 数据全部保存在本地 `data/` 目录（SQLite 数据库 + 上传文件）。**删除该目录会清空账号、知识库与上传文件**；重置前请先备份。
 
-## P0-0 … P0-4：测试、Runtime、任务持久化、知识与工具治理
+## P0-0 … P0-5：测试、Runtime、任务、知识、工具与成果面
 
 本仓库正在按 `Enterprise-Knowledge-Hub-Agent-P0-Design.md` 分阶段升级为 Agent 任务执行平台。当前完成：
 
@@ -92,6 +92,18 @@ npm start        # 默认 http://localhost:3210，可用 PORT=xxxx 覆盖
 - 系统设置新增「Agent 平台」：工具注册表策略、MCP 连接、平台模型、服务主体；入口按 PlatformAdmin / 组织管理员权限显示
 - `/api/auth/me` 返回 `is_platform_admin` / `is_admin`，前端据此隐藏无权操作
 
+**P0-5 成果面与基础文件工具**
+
+- 内容寻址 blob（`data/artifacts/blobs/aa/bb/<sha256>`）：原子写、去重、`ref_count`、软删除与 GC
+- 成果 API：`GET /api/tasks/:id/artifacts`、下载、`POST /api/tasks/:id/attachments`、`DELETE /api/tasks/:id/artifacts/:artifactId`
+- 下载每次重新校验任务 ACL；失败统一 404；`attachment`/`nosniff`/`private, no-store` + 审计 `artifact.download`
+- 内置文件工具：`artifact.create`、`document.read/write`、`spreadsheet.read/write`、`archive.read/create`
+- ZIP 护栏：路径遍历、绝对路径、符号链接、加密条目、重复名、条目/大小/压缩比上限；只内存解压
+- `finish.artifact_refs` 双层校验；带幂等键的写崩溃后可重领，不进入人工对账
+- DOCX 最小 OOXML 写入；PDF/DOCX/XLSX/PPTX 文本读取复用统一解析与限额
+- 前端任务详情新增「成果」卡：列表、下载、上传附件、删除；新建任务可选附件
+- 关闭 S-09（成果路径遍历与未授权下载）；`spreadsheet-audit` 升至 1.1.0 并可选
+
 ```bash
 npm test                 # 单元 + 集成（临时 SQLite，无需 Docker）
 npm run db:up            # 启动专用 PostgreSQL（127.0.0.1:55432）
@@ -99,14 +111,15 @@ export DATABASE_URL='postgres://ekh:ekh_dev_password@127.0.0.1:55432/ekh'
 npm run db:migrate       # 再执行一次应为幂等
 npm run test:pg          # 需 DATABASE_URL 指向 *_test 数据库（含 kill 恢复测试）
 npm run worker           # 另开终端：领取 Agent 任务（需 AGENT_PLATFORM_ENABLED=1）
+npm run artifacts:gc -- --dry-run   # 成果 blob GC 演练
 npm run repro:baseline   # 生成当前行为快照（会覆盖 docs/baseline）
 ```
 
-P0-2/P0-3/P0-4 任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`），或在预设中配置 `model_profile_id`。平台管理员通过 `PLATFORM_ADMIN_EMAILS` 指定。
+P0-2 起的任务执行还需要 `EKH_AGENT_MODEL_BASE_URL` / `EKH_AGENT_MODEL_NAME`（及可选 `EKH_AGENT_MODEL_API_KEY`），或在预设中配置 `model_profile_id`。平台管理员通过 `PLATFORM_ADMIN_EMAILS` 指定。
 
-> Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`（SQLite 知识面）。首次对现有 `data/app.db` 运行 P0-3 代码前请先备份；SQLite 迁移只增列/表，但备份是回滚前提。
+> Web 与 Worker 必须共享同一个 `EKH_DATA_DIR`（SQLite 知识面 + `artifacts/` 成果 blob）。首次对现有 `data/app.db` 运行新代码前请先备份；SQLite 迁移只增列/表，但备份是回滚前提。
 
-详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`、`0005-p0-4-tools-approvals-sandbox-mcp.md`。
+详细步骤见 `docs/p0/runbook.md`；决策见 `docs/adr/0001-p0-baseline-decisions.md`、`0002-p0-1-runtime-decoupling.md`、`0003-p0-2-task-persistence.md`、`0004-p0-3-knowledge-and-skills.md`、`0005-p0-4-tools-approvals-sandbox-mcp.md`、`0006-p0-5-artifacts-file-tools.md`。
 
 
 ## 配置模型

@@ -54,7 +54,8 @@ async function main(){
     skillLoader: async ref => (await import('../server/skills/index.js')).loadSkillInstructions(ref),
     toolFactory: async ({ task, knowledge, signal }) => {
       const { createToolExecutor } = await import('../server/tools/executor.js');
-      return createToolExecutor({ task, knowledge, signal });
+      const { getArtifactService } = await import('../server/artifacts/service.js');
+      return createToolExecutor({ task, knowledge, signal, artifacts: getArtifactService(), workerId });
     },
     ...optionsFromEnv(),
   });

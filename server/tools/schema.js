@@ -117,7 +117,7 @@ function validateAny(value, schema, path, depth){
     for (const [key, sub] of Object.entries(value)){
       if (Object.prototype.hasOwnProperty.call(props, key)){
         validateValue(sub, props[key], `${path}.${key}`, depth + 1);
-      } else if (schema.additionalProperties !== true){
+      } else if (schema.additionalProperties === false){
         fail(`${path}.${key}`, '不是允许的字段');
       }
     }
@@ -127,16 +127,19 @@ function validateAny(value, schema, path, depth){
 function validateValue(value, schema, path, depth){
   if (depth > MAX_SCHEMA_DEPTH) fail(path, '嵌套过深');
   if (!isPlainObject(schema)) fail(path, 'schema 不合法');
-  if (Array.isArray(schema.anyOf)){
-    const errors = [];
-    for (const sub of schema.anyOf){
-      try { validateValue(value, sub, path, depth); return; } catch (e){ errors.push(e.message); }
+  if (Array.isArray(schema.anyOf) || Array.isArray(schema.oneOf)){
+    // JSON Schema 语义：父级关键字与 anyOf/oneOf 同时生效。
+    const { anyOf, oneOf, ...base } = schema;
+    if (Object.keys(base).length) validateAny(value, base, path, depth);
+    if (Array.isArray(anyOf)){
+      const errors = [];
+      for (const sub of anyOf){
+        try { validateValue(value, sub, path, depth); return; } catch (e){ errors.push(e.message); }
+      }
+      fail(path, `不匹配 anyOf（${errors.slice(0, 2).join('；')}）`);
     }
-    fail(path, `不匹配 anyOf（${errors.slice(0, 2).join('；')}）`);
-  }
-  if (Array.isArray(schema.oneOf)){
     let matched = 0;
-    for (const sub of schema.oneOf){
+    for (const sub of oneOf){
       try { validateValue(value, sub, path, depth); matched += 1; } catch { /* 继续 */ }
     }
     if (matched !== 1) fail(path, '必须匹配且只匹配 oneOf 中的一项');

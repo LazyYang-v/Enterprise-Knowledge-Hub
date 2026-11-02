@@ -7,11 +7,16 @@ import {
   upsertSkill, listSkills, getSkill, getSkillByNameVersion, getFrozenSkill,
 } from './repo.js';
 import { listPresetSkills } from '../control/preset-repo.js';
+import { builtinDescriptors } from '../tools/builtins.js';
 
-// P0-3 暴露给 Skill 的内部能力；P0-4 会由 ToolRegistry 动态提供。
+// 兼容导出：P0-3 的只读知识工具集合。实际可用性由内置工具注册表动态计算。
 export const P0_3_AVAILABLE_TOOLS = Object.freeze([
   'knowledge.search', 'knowledge.get_document', 'knowledge.get_citation', 'knowledge.list_bases',
 ]);
+
+export function availableBuiltinTools(){
+  return builtinDescriptors().map(d => d.name);
+}
 
 export class SkillSelectionError extends Error {
   constructor(message, code = 'skill_unavailable'){
@@ -73,7 +78,7 @@ export { refFrom as parseSkillRef };
 export function createSkillRegistry({
   skillsDir = config.skills.dir || path.resolve(process.cwd(), 'skills'),
   instructionMaxChars = config.skills.instructionMaxChars,
-  availableTools = P0_3_AVAILABLE_TOOLS,
+  availableTools = availableBuiltinTools(),
   log = msg => console.log(`[skills] ${msg}`),
 } = {}){
   async function resolveRow(platformTenantId, ref){

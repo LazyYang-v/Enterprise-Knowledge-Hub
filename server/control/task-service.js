@@ -17,6 +17,7 @@ import {
 } from './task-repo.js';
 import { withTransaction, getPool } from './pg.js';
 import { countEvidence } from './evidence-repo.js';
+import { listArtifacts } from './artifact-repo.js';
 
 export class TaskValidationError extends Error {
   constructor(message){
@@ -289,7 +290,7 @@ export class TaskService {
   async snapshot({ tenantId, taskId, userId, isAdmin = false }){
     const task = await this.getTaskForUser({ tenantId, taskId, userId, isAdmin });
     const approvalPromise = getPendingApproval(tenantId, taskId);
-    const [plan, pendingInput, pendingApproval, pendingToolCall, checkpoint, steps, evidenceCount] = await Promise.all([
+    const [plan, pendingInput, pendingApproval, pendingToolCall, checkpoint, steps, evidenceCount, artifacts] = await Promise.all([
       listPlanItems(tenantId, taskId),
       getPendingInput(tenantId, taskId),
       approvalPromise,
@@ -297,6 +298,7 @@ export class TaskService {
       getLatestCheckpoint(tenantId, taskId),
       this._recentSteps(tenantId, taskId),
       countEvidence({ tenantId, taskId }),
+      listArtifacts({ tenantId, taskId, limit: 200 }),
     ]);
     const lastStep = steps[0] || null;
     const tools = Array.isArray(task.input_json?.tools)
@@ -344,7 +346,7 @@ export class TaskService {
           expires_at: isoOrNull(pendingApproval.expires_at),
         } : null,
       },
-      artifacts: [],
+      artifacts,
       usage: {
         steps: Number(task.usage_json?.steps || 0),
         model_calls: Number(task.usage_json?.model_calls || 0),
@@ -363,7 +365,8 @@ export class TaskService {
         can_cancel: !TERMINAL_STATUSES.has(task.status) && (task.owner_id === userId || isAdmin),
         can_resume: task.status === 'failed' && RETRYABLE_ERRORS.has(task.last_error_code || '') && (task.owner_id === userId || isAdmin),
         can_approve: canApprove,
-        can_download: false,
+        can_download: task.owner_id === userId || isAdmin,
+        can_upload_attachment: !TERMINAL_STATUSES.has(task.status) && (task.owner_id === userId || isAdmin),
       },
       created_at: isoOrNull(task.created_at),
       updated_at: isoOrNull(task.updated_at),

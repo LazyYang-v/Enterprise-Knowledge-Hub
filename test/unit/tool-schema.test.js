@@ -49,6 +49,26 @@ test('参数校验：enum / const / anyOf / oneOf / 数组', () => {
   assert.throws(() => validateToolArguments(schema, { mode: 'a', kind: 'x', list: [1], exactly: 1 }), /oneOf/);
 });
 
+test('参数校验：对象级 anyOf 与父级属性同时生效', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      artifact_id: { type: 'string', minLength: 1 },
+      name: { type: 'string', minLength: 1 },
+      include_text: { type: 'boolean' },
+    },
+    anyOf: [{ required: ['artifact_id'] }, { required: ['name'] }],
+    additionalProperties: false,
+  };
+  assert.doesNotThrow(() => validateToolArguments(schema, { artifact_id: 'a' }));
+  assert.doesNotThrow(() => validateToolArguments(schema, { name: 'x.zip', include_text: true }));
+  assert.throws(() => validateToolArguments(schema, {}), /anyOf/);
+  assert.throws(() => validateToolArguments(schema, { include_text: true }), /anyOf/);
+  // 父级 properties 仍然生效：类型与未知字段都要检查。
+  assert.throws(() => validateToolArguments(schema, { artifact_id: 'a', include_text: 'yes' }), isMismatch);
+  assert.throws(() => validateToolArguments(schema, { artifact_id: 'a', extra: 1 }), isMismatch);
+});
+
 test('schema 定义：拒绝 $ref、未知关键字与过深嵌套', () => {
   for (const bad of [
     { type: 'object', $ref: '#/x' },

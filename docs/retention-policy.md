@@ -25,12 +25,14 @@
 5. 法律保留（legal hold）优先于自动删除；有保留标记的数据不得 GC。
 6. 审计记录不物理删除；归档走独立、受审计的流程。
 
-## 3. Blob GC
+## 3. Blob GC（P0-5 已实现）
 
-- blob 按 SHA-256 内容寻址并去重。
-- 仅当 `ref_count = 0` 且无法律保留时删除。
-- 孤儿文件巡检：数据库无记录且超过 24 小时的文件进入隔离/清理。
-- 所有删除操作写审计。
+- blob 按 SHA-256 内容寻址并去重；`storage_key` 只存 `blobs/aa/bb/<sha>`。
+- 软删除只写 `artifacts.deleted_at`，列表/下载立即不可见；`ref_count` 与数据库引用为准。
+- GC 先锁定 blob，清理超过宽限期（默认 24h）的软删除行；仍有引用则跳过；删除行后再删文件。
+- 孤儿文件（数据库无记录且超过宽限期）进入 `artifacts/quarantine`，不自动物理删除。
+- 运维命令：`npm run artifacts:gc -- --dry-run` / `npm run artifacts:gc` / `--grace-ms=0`（仅维护）。
+- 所有删除操作写审计；法律保留（legal hold）优先于自动删除，有保留标记的数据不得 GC。
 
 ## 4. 事件与审计不可变
 

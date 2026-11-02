@@ -57,6 +57,36 @@ export async function startApp(env = {}){
     return { status: res.status, text, events };
   }
 
+  /** 上传 multipart/form-data 附件；返回解析后的 JSON 与原始响应。 */
+  async function uploadForm(url, {
+    token, filename, data, field = 'file', contentType = 'application/octet-stream', fields = {},
+  } = {}){
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
+    form.append(field, new Blob([data], { type: contentType }), filename);
+    const res = await fetch(base + url, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    const buffer = Buffer.from(await res.arrayBuffer());
+    let json = null;
+    try { json = JSON.parse(buffer.toString('utf8')); } catch {}
+    return { status: res.status, data: json, buffer, headers: res.headers };
+  }
+
+  /** 二进制/流式响应（下载）测试接口。 */
+  async function requestRaw(method, url, { token, headers = {} } = {}){
+    const res = await fetch(base + url, {
+      method,
+      headers: { ...headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    const buffer = Buffer.from(await res.arrayBuffer());
+    let json = null;
+    try { json = JSON.parse(buffer.toString('utf8')); } catch {}
+    return { status: res.status, buffer, data: json, headers: res.headers };
+  }
+
   async function waitFor(fn, { timeout = 5000, interval = 50 } = {}){
     const start = Date.now();
     while (Date.now() - start < timeout){
@@ -73,5 +103,5 @@ export async function startApp(env = {}){
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  return { base, dir, request, register, postSse, waitFor, close };
+  return { base, dir, request, requestRaw, register, postSse, uploadForm, waitFor, close };
 }

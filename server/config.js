@@ -86,6 +86,23 @@ export function parseConfig(env = process.env){
     service: Object.freeze({
       legacyTokenEnabled: parseBool(env.EKH_SERVICE_LEGACY_TOKEN_ENABLED, true),
     }),
+    artifacts: Object.freeze({
+      maxBytes: parsePositiveInt(env.EKH_ARTIFACT_MAX_BYTES, 25 * 1024 * 1024, 200 * 1024 * 1024),
+      taskMaxBytes: parsePositiveInt(env.EKH_ARTIFACT_MAX_TASK_BYTES, 100 * 1024 * 1024, 1024 * 1024 * 1024),
+      maxPerTask: parsePositiveInt(env.EKH_ARTIFACT_MAX_PER_TASK, 100, 1000),
+      uploadMaxBytes: parsePositiveInt(env.EKH_ARTIFACT_UPLOAD_MAX_BYTES, 25 * 1024 * 1024, 200 * 1024 * 1024),
+      gcGraceMs: parsePositiveInt(env.EKH_ARTIFACT_GC_GRACE_MS, 24 * 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000),
+    }),
+    files: Object.freeze({
+      maxReadChars: parsePositiveInt(env.EKH_FILE_MAX_READ_CHARS, 6000, 100000),
+      extractMaxChars: parsePositiveInt(env.EKH_FILE_EXTRACT_MAX_CHARS, 200000, 2000000),
+      zipMaxEntries: parsePositiveInt(env.EKH_ZIP_MAX_ENTRIES, 200, 5000),
+      zipMaxEntryBytes: parsePositiveInt(env.EKH_ZIP_MAX_ENTRY_BYTES, 10 * 1024 * 1024, 200 * 1024 * 1024),
+      zipMaxTotalBytes: parsePositiveInt(env.EKH_ZIP_MAX_TOTAL_BYTES, 40 * 1024 * 1024, 1024 * 1024 * 1024),
+      zipMaxRatio: parsePositiveInt(env.EKH_ZIP_MAX_RATIO, 100, 10000),
+      sheetMaxRows: parsePositiveInt(env.EKH_SHEET_MAX_ROWS, 5000, 100000),
+      sheetMaxCols: parsePositiveInt(env.EKH_SHEET_MAX_COLS, 100, 1000),
+    }),
   });
 }
 

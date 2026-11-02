@@ -631,6 +631,12 @@ kbd{font-family:var(--mono);font-size:10px;border:.5px solid var(--border);borde
 .task-tool-meta,.task-tool-hash,.task-evidence-meta{color:var(--text-3);font-size:11px;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap}
 .task-tool-desc{color:var(--text-2);font-size:12px;line-height:1.55;margin-top:5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .task-evidence-excerpt{color:var(--text-2);font-size:12px;line-height:1.6;margin-top:5px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.task-artifact-list{display:flex;flex-direction:column;gap:9px}
+.task-artifact-item{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;border:.5px solid var(--stroke);border-radius:var(--radius-lg);padding:9px 10px;background:var(--bg-sidebar)}
+.task-artifact-main{flex:1;min-width:0}
+.task-artifact-name{font-size:12.5px;font-weight:500;color:var(--text-1);line-height:1.5;word-break:break-all}
+.task-artifact-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--text-3);font-size:11px;margin-top:4px}
+.task-artifact-actions{display:flex;justify-content:flex-end;margin-top:10px}
 .task-usage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .task-usage-item{background:var(--bg-secondary);border-radius:var(--radius);padding:8px 10px}
 .task-usage-k{color:var(--text-3);font-size:11px}

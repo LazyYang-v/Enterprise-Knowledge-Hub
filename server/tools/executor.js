@@ -19,7 +19,7 @@ function attemptNumber(descriptor){
   return String(descriptor?.version || '').split('.')[1];
 }
 
-export function createToolExecutor({ task, knowledge = null, signal = null } = {}){
+export function createToolExecutor({ task, knowledge = null, signal = null, artifacts = null, workerId = null } = {}){
   const snapshots = snapshotList(task);
 
   function findSnapshot(name){
@@ -73,7 +73,8 @@ export function createToolExecutor({ task, knowledge = null, signal = null } = {
         const handler = getBuiltinHandler(descriptor.name);
         if (!handler) throw new ToolRunError('tool_unavailable', '内置工具未注册');
         value = await handler(args, {
-          task, knowledge, toolCallId, stepId, leaseEpoch: task.lease_epoch,
+          task, knowledge, artifacts, workerId, toolCallId, stepId,
+          leaseEpoch: task.lease_epoch, signal,
         });
       } else if (descriptor.source === 'custom'){
         const toolId = descriptor.tool_id || descriptor.name.slice('custom.'.length);

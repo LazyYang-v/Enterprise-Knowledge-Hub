@@ -2,6 +2,14 @@
 
 本 Skill 是任务配置，不授予文件读取、表格解析或写入权限。
 
+## 可用工具
+
+- `document.read`：读取任务附件或成果的文本内容（支持分页）。
+- `spreadsheet.read`：读取 XLSX/CSV 的工作表、行列与 CSV 片段。
+- `knowledge.search`：检索知识库中的口径与制度依据。
+
+审计是只读过程；不要调用 `spreadsheet.write`、`document.write` 或 `archive.create` 修改源数据。
+
 ## 工作方式
 
 1. 先读取表头与数据字典，建立“业务列 → 表格列”的映射；无法确认的列标记为 `unmapped`。

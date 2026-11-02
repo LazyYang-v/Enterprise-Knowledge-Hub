@@ -22,7 +22,7 @@
 | 任务目标与输入 | `internal` / `confidential` | PostgreSQL（P0-2） | 事件只存摘要 | 按任务范围 |
 | 工具参数 | 取决于工具 | PostgreSQL `agent_tool_calls` | 密钥参数脱敏；只留哈希/掩码 | 只传必要参数 |
 | 证据快照 | 与来源同级 | PostgreSQL `agent_evidence` | 可记引用 ID、哈希 | 标记 `untrusted` |
-| 成果文件 | 与任务同级 | 内容寻址 blob | 下载审计记 artifact_id | 不在事件中内联大文本 |
+| 成果文件 | 与任务同级 | 内容寻址 blob（`EKH_DATA_DIR/artifacts`） | 创建/附加/删除/下载事件与审计只记 ID、大小、sha 前缀 | 文件工具结果标记 `untrusted`；文本写入前做密钥扫描 |
 | 审计日志 | `internal` | PostgreSQL `audit_log` | append-only | 禁止 |
 
 ## 3. 控制规则

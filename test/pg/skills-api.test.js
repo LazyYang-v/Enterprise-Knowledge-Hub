@@ -33,6 +33,10 @@ test('Skills API：列表、详情与 reload 权限', { skip }, async t => {
   const kr = list.data.skills.find(s => s.name === 'knowledge-research');
   assert.equal(kr.selectable, true);
   assert.equal(kr.instructions, undefined, '列表不得返回 instructions');
+  const sa = list.data.skills.find(s => s.name === 'spreadsheet-audit');
+  assert.equal(sa.selectable, true, 'P0-5 文件工具就绪后 spreadsheet-audit 应可选');
+  assert.equal(sa.version, '1.1.0');
+  assert.deepEqual(sa.required_tools, ['document.read', 'spreadsheet.read']);
 
   const detail = await app.request('GET', `/api/skills/${kr.id}`, { token: user.token });
   assert.equal(detail.status, 200);
