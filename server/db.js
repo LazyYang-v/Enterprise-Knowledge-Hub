@@ -158,6 +158,17 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS custom_tools (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  parameters TEXT DEFAULT '{}',
+  code TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  created_at INTEGER,
+  updated_at INTEGER
+);
 CREATE INDEX IF NOT EXISTS idx_docs_kb ON documents(kb_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_kb ON chunks(kb_id);

@@ -7,13 +7,20 @@ function headers(m){
   return h;
 }
 
-export async function* streamChat(model, messages, { temperature = 0.7, signal } = {}){
-  const base = model.base_url.replace(/\/+$/, '');
+// 规整接口地址：容错用户直接粘贴完整端点（…/chat/completions、…/embeddings 等）
+export function normalizeBaseUrl(url){
+  return String(url).trim().replace(/\/+$/, '').replace(/\/(chat\/completions|embeddings|embedding|rerank)$/, '');
+}
+
+export async function* streamChat(model, messages, { temperature = 0.7, signal, tools } = {}){
+  const base = normalizeBaseUrl(model.base_url);
+  const body = { model: model.model_name, messages, temperature, stream: true };
+  if (tools && tools.length) body.tools = tools;
   const res = await fetch(base + '/chat/completions', {
     method: 'POST',
     headers: headers(model),
     signal,
-    body: JSON.stringify({ model: model.model_name, messages, temperature, stream: true }),
+    body: JSON.stringify(body),
   });
   if (!res.ok){
     const text = await res.text().catch(() => '');
@@ -22,7 +29,9 @@ export async function* streamChat(model, messages, { temperature = 0.7, signal }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-  while (true){
+  const pendingCalls = new Map();
+  let hasCalls = false;
+  outer: while (true){
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
@@ -32,20 +41,34 @@ export async function* streamChat(model, messages, { temperature = 0.7, signal }
       const s = line.trim();
       if (!s.startsWith('data:')) continue;
       const payload = s.slice(5).trim();
-      if (payload === '[DONE]') return;
+      if (payload === '[DONE]') break outer;
       try {
         const json = JSON.parse(payload);
-        const delta = json.choices?.[0]?.delta?.content;
-        const reasoning = json.choices?.[0]?.delta?.reasoning_content;
+        const d = json.choices?.[0]?.delta || {};
+        const reasoning = d.reasoning_content;
         if (reasoning) yield { reasoning };
-        if (delta) yield { text: delta };
+        if (d.content) yield { text: d.content };
+        if (Array.isArray(d.tool_calls)){
+          hasCalls = true;
+          for (const c of d.tool_calls){
+            const idx = c.index ?? 0;
+            const cur = pendingCalls.get(idx) || { id: '', name: '', arguments: '' };
+            if (c.id) cur.id = c.id;
+            if (c.function?.name && !cur.name) cur.name = c.function.name;
+            if (c.function?.arguments) cur.arguments += c.function.arguments;
+            pendingCalls.set(idx, cur);
+          }
+        }
       } catch {}
     }
+  }
+  if (hasCalls){
+    yield { toolCalls: [...pendingCalls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c).filter(c => c.name) };
   }
 }
 
 export async function chatOnce(model, messages, { temperature = 0.3, signal } = {}){
-  const base = model.base_url.replace(/\/+$/, '');
+  const base = normalizeBaseUrl(model.base_url);
   const res = await fetch(base + '/chat/completions', {
     method: 'POST',
     headers: headers(model),
@@ -58,7 +81,7 @@ export async function chatOnce(model, messages, { temperature = 0.3, signal } = 
 }
 
 export async function embed(model, texts){
-  const base = model.base_url.replace(/\/+$/, '');
+  const base = normalizeBaseUrl(model.base_url);
   const out = [];
   const BATCH = 16;
   for (let i = 0; i < texts.length; i += BATCH){

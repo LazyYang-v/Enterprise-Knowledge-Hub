@@ -560,6 +560,7 @@ function renderKbDetail(){
   const canW = canWriteKb();
   $('#upload-btn-label').textContent = '上传文档';
   $('#upload-btn').style.display = canW ? '' : 'none';
+  $('#upload-folder-btn').style.display = canW ? '' : 'none';
   $('#qa-btn').style.display = canW ? '' : 'none';
   $('#batch-download-btn').style.display = kb.docs ? '' : 'none';
   $('#kb-settings-btn').style.display = '';
@@ -746,19 +747,44 @@ $('#qa-btn').addEventListener('click', () => {
   if (!state.currentKb) return;
   openQaDialog();
 });
+$('#upload-folder-btn').addEventListener('click', () => {
+  if (!state.currentKb) return;
+  $('#upload-folder-input').click();
+});
 $('#upload-input').addEventListener('change', async e => {
   const files = [...e.target.files];
   e.target.value = '';
-  if (!files.length || !state.currentKb) return;
+  if (files.length) await uploadDocs(files);
+});
+$('#upload-folder-input').addEventListener('change', async e => {
+  const all = [...e.target.files];
+  e.target.value = '';
+  const files = all.filter(f => !(f.webkitRelativePath || f.name).split('/').some(p => p.startsWith('.')));
+  if (!files.length) return;
+  if (files.length > 200){
+    toast('文件夹内文件过多，仅上传前 200 个', false);
+    files.length = 200;
+  }
+  await uploadDocs(files);
+});
+async function uploadDocs(files){
+  if (!state.currentKb || !files.length) return;
   const fd = new FormData();
-  files.forEach(f => fd.append('files', f));
+  let skipped = 0;
+  for (const f of files){
+    if (f.size > 200 * 1024 * 1024){ skipped++; continue; }
+    fd.append('files', f, f.name);
+    // 浏览器会剥掉 multipart filename 里的路径，相对路径用独立字段传给后端
+    fd.append('paths', f.webkitRelativePath || f.name);
+  }
+  if (!fd.has('files')){ if (skipped) toast('所选文件超过 200MB，未上传', false); return; }
   try {
     await API.upload(`/kbs/${state.currentKb.id}/documents`, fd);
-    toast(`已开始解析 ${files.length} 个文档`);
+    toast(`已开始解析 ${files.length - skipped} 个文档${skipped ? `，${skipped} 个超大文件已跳过` : ''}`);
     await loadDocs();
     startDocPolling();
   } catch (err2){ toast(err2.message, false); }
-});
+}
 function openQaDialog(){
   const dlg = openDialog(`
     <h3>新增问答对</h3>
@@ -1194,6 +1220,21 @@ async function streamAnswer(text){
         } else if (evt.type === 'delta'){
           answer += evt.text;
           queueRender();
+        } else if (evt.type === 'tool' || evt.type === 'tool_result'){
+          const line = document.createElement('div');
+          line.className = 'tool-call-line' + (evt.type === 'tool_result' ? ' result' : '');
+          if (evt.type === 'tool'){
+            let argsShort = '';
+            try { argsShort = JSON.stringify(JSON.parse(evt.args || '{}')); } catch { argsShort = String(evt.args || ''); }
+            if (argsShort.length > 120) argsShort = argsShort.slice(0, 120) + '…';
+            line.innerHTML = `<span class="tcl-icon">🔧</span><span>调用工具</span><b>${esc(evt.name)}</b><code>${esc(argsShort)}</code>`;
+          } else {
+            const r = String(evt.result || '');
+            line.title = r;
+            line.innerHTML = `<span class="tcl-icon">↳</span><span>「${esc(evt.name)}」返回</span><code>${esc(r.length > 160 ? r.slice(0, 160) + '…' : r)}</code>`;
+          }
+          $('.msg-ai-body', wrap).insertBefore(line, answerEl);
+          $('#thread').scrollTop = $('#thread').scrollHeight;
         } else if (evt.type === 'error'){
           answer += (answer ? '\n\n' : '') + '⚠️ ' + evt.message;
           queueRender();
@@ -1604,6 +1645,7 @@ const TOOL_ICONS = {
   'web-search': '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5S9.5 5.8 12 3.5z"/></svg>',
   'mcp': '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4" width="8" height="7" rx="1.5"/><rect x="12.5" y="13" width="8" height="7" rx="1.5"/><path d="M11.5 7.5H17a2 2 0 0 1 2 2v3.5M12.5 16.5H7a2 2 0 0 1-2-2V11" stroke-linecap="round"/></svg>',
   'browser': '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><path d="M12 3.5v5M12 15.5v5M3.5 12h5M15.5 12h5"/></svg>',
+  'custom': '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5-3.9l-2.8 2.8 2 2L21.5 4.6a4 4 0 0 1-5.4 5L8 17.7a2 2 0 1 1-2.8-2.8l8.3-8.4z" stroke-linejoin="round"/></svg>',
 };
 async function loadTools(){
   try {
@@ -1618,9 +1660,10 @@ function renderTools(){
     const card = document.createElement('div');
     card.className = 'tool-card';
     const badge = t.enabled ? '<span class="badge brand">已启用</span>' : '<span class="badge">未启用</span>';
-    card.innerHTML = `<div class="tool-head"><span class="tool-icon">${TOOL_ICONS[t.key] || TOOL_ICONS.mcp}</span><span class="tool-name">${esc(t.name)}</span>${badge}<button class="switch${t.enabled ? ' on' : ''}" title="${t.enabled ? '关闭' : '开启'}"></button></div><div class="tool-desc">${esc(t.description)}</div>` +
+    card.innerHTML = `<div class="tool-head"><span class="tool-icon">${t.custom ? TOOL_ICONS.custom : (TOOL_ICONS[t.key] || TOOL_ICONS.mcp)}</span><span class="tool-name">${esc(t.name)}</span>${badge}${t.custom ? '<button class="tool-del" title="删除工具"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg></button>' : ''}<button class="switch${t.enabled ? ' on' : ''}" title="${t.enabled ? '关闭' : '开启'}"></button></div><div class="tool-desc">${esc(t.description)}</div>` +
       (t.key === 'web-search' && t.enabled ? '<div class="form-hint">智能体勾选「网络搜索」工具后，对话时会自动检索互联网（需在下方配置 API Key）。</div>' : '') +
-      (t.key === 'mcp' || t.key === 'browser' ? '<div class="form-hint">该能力通过配置接入，当前版本为占位开关。</div>' : '');
+      (t.key === 'mcp' || t.key === 'browser' ? '<div class="form-hint">该能力通过配置接入，当前版本为占位开关。</div>' : '') +
+      (t.custom ? '<div class="form-hint">自定义 JS 工具，服务端执行。编辑智能体时勾选后，模型将在对话中按需调用。</div>' : '');
     if (t.key === 'web-search' && t.enabled){
       const cfg = t.config || {};
       const row = document.createElement('div');
@@ -1635,6 +1678,12 @@ function renderTools(){
       });
       card.appendChild(row);
     }
+    if (t.custom){
+      $('.tool-del', card).addEventListener('click', async () => {
+        if (!confirm(`删除工具「${t.name}」？引用它的智能体将自动移除该工具。`)) return;
+        try { await API.del('/tools/custom/' + t.key.slice(7)); toast('工具已删除'); loadTools(); } catch (e){ toast(e.message, false); }
+      });
+    }
     $('.switch', card).addEventListener('click', async () => {
       try {
         const r = await API.put('/tools/' + t.key, { enabled: !t.enabled });
@@ -1645,7 +1694,29 @@ function renderTools(){
     });
     grid.appendChild(card);
   }
+  const up = document.createElement('div');
+  up.className = 'tool-card tool-upload';
+  up.innerHTML =
+    '<div class="tool-head"><span class="tool-icon">' + TOOL_ICONS.custom + '</span><span class="tool-name">上传自定义工具</span></div>' +
+    '<div class="tool-desc">上传 JS 文件（<code>export default</code> 一个包含 name、description、parameters、execute(args) 的对象），上传后即可在编辑智能体时勾选，由模型在对话中调用。仅上传可信代码。</div>';
+  up.addEventListener('click', () => $('#tool-file-input').click());
+  grid.appendChild(up);
 }
+async function uploadToolFile(file){
+  if (!file) return;
+  if (file.size > 256 * 1024){ toast('文件过大（上限 256KB）', false); return; }
+  try {
+    const code = await file.text();
+    await API.post('/tools/upload', { code });
+    toast(`工具「${file.name.replace(/\.[^.]+$/, '')}」已上传`);
+    await loadTools();
+  } catch (e){ toast(e.message, false); }
+}
+$('#tool-file-input').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  await uploadToolFile(f);
+});
 
 /* ================= 共享空间 ================= */
 async function loadOrgs(){

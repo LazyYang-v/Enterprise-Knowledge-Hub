@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import { db, UPLOAD_DIR } from '../db.js';
 import { $uuid, now, err, fixFileName } from '../util.js';
 import { authRequired } from '../auth.js';
+import { normalizeBaseUrl } from '../llm.js';
+import { parseToolCode } from '../custom-tools.js';
 
 const router = Router();
 router.use(authRequired);
@@ -71,11 +73,55 @@ router.get('/tools', (req, res) => {
     if (!have.has(key)) db.prepare('INSERT INTO tools(key, enabled, config) VALUES(?,0,?)').run(key, '{}');
   }
   const all = db.prepare('SELECT * FROM tools').all();
-  res.json({ tools: all.map(t => ({ key: t.key, ...TOOL_META[t.key], enabled: !!t.enabled, config: JSON.parse(t.config || '{}') })) });
+  const customs = db.prepare('SELECT id, name, description, enabled FROM custom_tools ORDER BY created_at').all();
+  res.json({ tools: [
+    ...all.map(t => ({ key: t.key, ...TOOL_META[t.key], enabled: !!t.enabled, config: JSON.parse(t.config || '{}') })),
+    ...customs.map(t => ({ key: 'custom:' + t.id, name: t.name, description: t.description, enabled: !!t.enabled, config: {}, custom: true })),
+  ] });
+});
+
+function customToolRow(key, t){
+  return { key, name: t.name, description: t.description, enabled: !!t.enabled, config: {}, custom: true };
+}
+
+router.post('/tools/upload', (req, res) => {
+  const { code } = req.body || {};
+  if (!code || !String(code).trim()) return err(res, 400, '未提供工具文件内容');
+  let meta;
+  try { meta = parseToolCode(code); } catch (e){ return err(res, 400, e.message); }
+  const id = $uuid();
+  const ts = now();
+  db.prepare('INSERT INTO custom_tools(id, owner_id, name, description, parameters, code, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(id, req.user.id, meta.name, meta.description, JSON.stringify(meta.parameters), String(code), 1, ts, ts);
+  const fresh = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(id);
+  res.json({ tool: customToolRow('custom:' + id, fresh) });
+});
+
+router.delete('/tools/custom/:id', (req, res) => {
+  const t = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(req.params.id);
+  if (!t) return err(res, 404, '工具不存在');
+  db.prepare('DELETE FROM custom_tools WHERE id = ?').run(t.id);
+  // 从引用了该工具的智能体中同步移除
+  for (const a of db.prepare('SELECT id, tools FROM agents').all()){
+    const arr = JSON.parse(a.tools || '[]');
+    if (arr.includes('custom:' + t.id)){
+      db.prepare('UPDATE agents SET tools = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(arr.filter(k => k !== 'custom:' + t.id)), now(), a.id);
+    }
+  }
+  res.json({ ok: true });
 });
 
 router.put('/tools/:key', (req, res) => {
-  const t = db.prepare('SELECT * FROM tools WHERE key = ?').get(req.params.key);
+  const { key } = req.params;
+  if (key.startsWith('custom:')){
+    const t = db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(key.slice(7));
+    if (!t) return err(res, 404, '工具不存在');
+    const { enabled } = req.body || {};
+    if (enabled != null) db.prepare('UPDATE custom_tools SET enabled = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, now(), t.id);
+    return res.json({ tool: customToolRow(key, db.prepare('SELECT * FROM custom_tools WHERE id = ?').get(t.id)) });
+  }
+  const t = db.prepare('SELECT * FROM tools WHERE key = ?').get(key);
   if (!t) return err(res, 404, '工具不存在');
   const { enabled, config } = req.body || {};
   if (enabled != null) db.prepare('UPDATE tools SET enabled = ? WHERE key = ?').run(enabled ? 1 : 0, t.key);
@@ -102,7 +148,7 @@ router.post('/models', (req, res) => {
   if (!name || !base_url || !model_name) return err(res, 400, '名称、接口地址与模型 ID 不能为空');
   const id = $uuid();
   db.prepare('INSERT INTO models(id, kind, name, provider, base_url, api_key, model_name, is_default, created_at) VALUES(?,?,?,?,?,?,?,?,?)')
-    .run(id, kind, String(name).slice(0, 80), String(provider).slice(0, 80), String(base_url), String(api_key), String(model_name).slice(0, 120), is_default ? 1 : 0, now());
+    .run(id, kind, String(name).slice(0, 80), String(provider).slice(0, 80), normalizeBaseUrl(base_url), String(api_key), String(model_name).slice(0, 120), is_default ? 1 : 0, now());
   if (is_default) db.prepare('UPDATE models SET is_default = 0 WHERE kind = ? AND id != ?').run(kind, id);
   res.json({ model: modelRow(db.prepare('SELECT * FROM models WHERE id = ?').get(id)) });
 });
@@ -113,7 +159,7 @@ router.put('/models/:id', (req, res) => {
   const { name, provider, base_url, api_key, model_name, is_default } = req.body || {};
   if (name != null) db.prepare('UPDATE models SET name = ? WHERE id = ?').run(String(name).slice(0, 80), m.id);
   if (provider != null) db.prepare('UPDATE models SET provider = ? WHERE id = ?').run(String(provider).slice(0, 80), m.id);
-  if (base_url != null) db.prepare('UPDATE models SET base_url = ? WHERE id = ?').run(String(base_url), m.id);
+  if (base_url != null) db.prepare('UPDATE models SET base_url = ? WHERE id = ?').run(normalizeBaseUrl(base_url), m.id);
   if (api_key != null && api_key !== '••••••••') db.prepare('UPDATE models SET api_key = ? WHERE id = ?').run(String(api_key), m.id);
   if (model_name != null) db.prepare('UPDATE models SET model_name = ? WHERE id = ?').run(String(model_name).slice(0, 120), m.id);
   if (is_default != null){
@@ -131,7 +177,7 @@ router.delete('/models/:id', (req, res) => {
 router.post('/models/test', async (req, res) => {
   const { kind = 'chat', base_url, api_key = '', model_name } = req.body || {};
   if (!base_url || !model_name) return err(res, 400, '接口地址与模型 ID 不能为空');
-  const base = String(base_url).trim().replace(/\/+$/, '').replace(/\/(chat\/completions|embeddings)$/, '');
+  const base = normalizeBaseUrl(base_url);
   const headers = { 'Content-Type': 'application/json', ...(api_key && api_key !== '••••••••' ? { Authorization: `Bearer ${api_key}` } : {}) };
   const isEmbedding = kind === 'embedding';
   const isRerank = kind === 'rerank';

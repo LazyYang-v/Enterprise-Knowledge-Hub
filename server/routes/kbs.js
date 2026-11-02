@@ -42,7 +42,8 @@ const upload = multer({
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
-    filename: (req, file, cb) => cb(null, fixFileName(file.originalname)),
+    // 文件夹上传时文件名可能是 "目录/子目录/文件名"，落盘前去掉路径分隔符
+    filename: (req, file, cb) => cb(null, fixFileName(file.originalname).replace(/[\\/]+/g, '__')),
   }),
   limits: { fileSize: 200 * 1024 * 1024 },
 });
@@ -158,22 +159,24 @@ export function docRow(d){
   };
 }
 
-router.post('/kbs/:id/documents', upload.array('files', 50), (req, res) => {
+router.post('/kbs/:id/documents', upload.array('files', 200), (req, res) => {
   const kb = db.prepare('SELECT * FROM knowledge_bases WHERE id = ?').get(req.params.id);
   if (!kb) return err(res, 404, '知识库不存在');
   const access = kbAccess(req.user, kb);
   if (!canWrite(access.role)) return err(res, 403, '没有上传权限');
   const files = req.files || [];
   if (!files.length) return err(res, 400, '未选择文件');
+  // 文件夹上传时前端随每个文件附带相对路径（paths 字段），用于在文档名中保留目录结构
+  const relPaths = [].concat(req.body.paths || []);
   const created = [];
-  for (const f of files){
+  for (const [i, f] of files.entries()){
     const ext = path.extname(f.originalname).replace('.', '').toLowerCase();
     const id = $uuid();
     const finalPath = path.join(path.dirname(f.path), 'source.' + (ext || 'bin'));
     fs.renameSync(f.path, finalPath);
     db.prepare(`INSERT INTO documents(id, kb_id, owner_id, kind, name, mime, ext, size, path, status, created_at, updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?, 'pending', ?, ?)`)
-      .run(id, kb.id, req.user.id, 'file', fixFileName(f.originalname).slice(0, 200), f.mimetype || '', ext, f.size, finalPath, now(), now());
+      .run(id, kb.id, req.user.id, 'file', fixFileName(relPaths[i] || f.originalname).slice(0, 200), f.mimetype || '', ext, f.size, finalPath, now(), now());
     enqueue(id);
     created.push(id);
   }

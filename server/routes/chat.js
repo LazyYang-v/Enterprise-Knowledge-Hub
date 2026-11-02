@@ -8,6 +8,7 @@ import { authRequired } from '../auth.js';
 import { retrieve } from '../search.js';
 import { streamChat, chatOnce, getModel } from '../llm.js';
 import { enqueue } from '../ingest.js';
+import { resolveAgentCustomTools, runCustomTool, toolFnName } from '../custom-tools.js';
 import { docRow } from './kbs.js';
 
 const router = Router();
@@ -190,6 +191,15 @@ router.post('/sessions/:id/chat', async (req, res) => {
       emit({ type: 'web', count: webResults ? webResults.length : 0 });
     }
 
+    // 工具箱上传的自定义工具：以 function calling 形式提供给模型
+    const customTools = agent ? resolveAgentCustomTools(agentTools) : [];
+    const openaiTools = customTools.map(t => {
+      let params;
+      try { params = JSON.parse(t.parameters || '{}'); } catch { params = { type: 'object', properties: {} }; }
+      return { type: 'function', function: { name: toolFnName(t), description: `【${t.name}】${t.description}`, parameters: params } };
+    });
+    const toolByFnName = new Map(customTools.map((t, i) => [openaiTools[i].function.name, t]));
+
     // 2. 引用与思考摘要
     const refsOut = refs.map((r, i) => ({
       idx: i + 1, chunk_id: r.chunk_id, document_id: r.document_id,
@@ -198,7 +208,7 @@ router.post('/sessions/:id/chat', async (req, res) => {
     }));
 
     const kbNames = [...new Set(refs.map(r => r.kb_name).filter(Boolean))];
-    const think = refs.length || webResults
+    let think = refs.length || webResults
       ? `已检索 ${kbIds.length ? kbNames.length + ' 个知识库' : '会话附件'}${refs.length ? '，命中 ' + refs.length + ' 个片段' : ''}${webResults ? '，网络搜索到 ' + webResults.length + ' 条结果' : ''}。` +
         (refs.length ? `相似度最高的片段来自《${refs[0].doc_name}》。` : '')
       : '未从知识库检索到相关内容，将直接回答。';
@@ -243,12 +253,36 @@ router.post('/sessions/:id/chat', async (req, res) => {
       emit({ type: 'meta', think, refs: refsOut });
       emit({ type: 'delta', text: answer });
     } else {
-      const stream = streamChat(chatModel, llmMessages, { temperature: mode === 'reasoning' ? 0.6 : 0.3, signal: abortStream.signal });
       emit({ type: 'meta', think, refs: refsOut });
+      const msgs = [...llmMessages];
+      let iter = 0;
       try {
-        for await (const part of stream){
-          if (aborted) break;
-          if (part.text){ answer += part.text; emit({ type: 'delta', text: part.text }); }
+        while (true){
+          const stream = streamChat(chatModel, msgs, { temperature: mode === 'reasoning' ? 0.6 : 0.3, signal: abortStream.signal, tools: openaiTools.length ? openaiTools : undefined });
+          let pending = null;
+          let iterText = '';
+          for await (const part of stream){
+            if (aborted) break;
+            if (part.toolCalls){ pending = part.toolCalls; continue; }
+            if (part.text){ iterText += part.text; answer += part.text; emit({ type: 'delta', text: part.text }); }
+          }
+          if (!pending || !pending.length || aborted || ++iter >= 6) break;
+          // 为每次调用分配 id，保证 assistant.tool_calls 与 tool 消息一一对应
+          const calls = pending.map(c => ({ id: c.id || 'call_' + $uuid().replace(/-/g, '').slice(0, 12), name: c.name, arguments: c.arguments || '{}' }));
+          msgs.push({
+            role: 'assistant',
+            content: iterText || null,
+            tool_calls: calls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
+          });
+          for (const c of calls){
+            const row = toolByFnName.get(c.name);
+            if (!row) continue;
+            emit({ type: 'tool', name: row.name, args: c.arguments });
+            const result = await runCustomTool(row, c.arguments);
+            emit({ type: 'tool_result', name: row.name, result: result.slice(0, 600) });
+            msgs.push({ role: 'tool', tool_call_id: c.id, content: result });
+            think += `已调用工具「${row.name}」并获取结果。`;
+          }
         }
       } catch (e){
         if (!aborted){

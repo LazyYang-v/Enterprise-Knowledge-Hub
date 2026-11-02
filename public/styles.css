@@ -340,6 +340,18 @@ svg{flex:none;display:block}
 .tool-icon{width:34px;height:34px;border-radius:9px;background:var(--brand-1);color:var(--brand);display:flex;align-items:center;justify-content:center}
 .tool-name{font-weight:600;flex:1}
 .tool-desc{color:var(--text-2);font-size:13px;line-height:1.6}
+.tool-upload{border-style:dashed;cursor:pointer;color:var(--text-2);transition:border-color .15s,background .15s}
+.tool-upload:hover{border-color:var(--brand);background:var(--brand-1)}
+.tool-upload .tool-desc code{font-family:var(--mono);font-size:11.5px}
+.tool-del{color:var(--text-3);padding:3px;border-radius:6px;flex:none;display:flex;align-items:center}
+.tool-del:hover{color:#e34d59;background:rgba(227,77,89,.1)}
+.tool-call-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);
+  background:var(--bg-secondary);border:.5px solid var(--stroke);border-radius:8px;padding:6px 10px;
+  margin:0 0 8px;width:fit-content;max-width:100%}
+.tool-call-line b{color:var(--text-1)}
+.tool-call-line code{font-family:var(--mono);font-size:11.5px;opacity:.85;word-break:break-all}
+.tool-call-line.result{background:transparent}
+.tool-call-line.result .tcl-icon{color:var(--brand-6)}
 
 /* ---------- 设置模态 ---------- */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:80;display:flex;align-items:center;justify-content:center;

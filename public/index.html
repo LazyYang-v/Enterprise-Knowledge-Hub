@@ -194,6 +194,10 @@
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16v10a2 2 0 0 1-2 2H8l-4 3.5V6z" stroke-linejoin="round"/></svg>
             新增问答对
           </button>
+          <button class="btn" id="upload-folder-btn">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 7A2.5 2.5 0 0 1 6 4.5h3.4a2 2 0 0 1 1.6.8l1 1.4a2 2 0 0 0 1.6.8H18A2.5 2.5 0 0 1 20.5 10v7A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17V7z"/><path d="M12 11v5m0 0l-2.5-2.5M12 16l2.5-2.5" stroke-linecap="round"/></svg>
+            上传文件夹
+          </button>
           <button class="btn primary" id="upload-btn">
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15V5m0 0L8.5 8.5M12 5l3.5 3.5M5 18.5h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span id="upload-btn-label">上传文档</span>
@@ -227,6 +231,7 @@
         <div class="pager" id="doc-pager"></div>
       </div>
       <input type="file" id="upload-input" multiple hidden>
+      <input type="file" id="upload-folder-input" webkitdirectory multiple hidden>
     </section>
 
     <!-- ===== 新对话 ===== -->
@@ -344,6 +349,7 @@
         </div>
       </div>
       <div class="toolbox-grid" id="toolbox-grid"></div>
+      <input type="file" id="tool-file-input" accept=".js,.mjs,.txt" style="display:none">
     </section>
 
     <!-- ===== 共享空间 ===== -->
